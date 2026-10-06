@@ -1,0 +1,5 @@
+# 统一行尾：源码 LF，PowerShell 脚本 CRLF（Windows PowerShell 5.1 对 LF 脚本不友好）
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.db binary

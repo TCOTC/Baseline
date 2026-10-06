@@ -1,0 +1,22 @@
+[package]
+name = "baseline"
+version = "0.1.0"
+edition = "2024"
+description = "基线 —— 和之前的你对比"
+# 专有许可，非开源。条款见仓库根目录的 LICENSE（LicenseRef-Proprietary = SPDX 自定义许可引用）。
+license = "LicenseRef-Proprietary"
+publish = false
+
+[dependencies]
+# bundled：用 MSVC 现场编译 SQLite 源码，不依赖系统 sqlite3.dll
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+chrono = "0.4"
+anyhow = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
