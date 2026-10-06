@@ -44,6 +44,7 @@ public class BaselineUi {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint from, uint to, bool attach);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
 
@@ -259,20 +260,62 @@ function Invoke-Wheel {
 }
 
 function Save-Shot {
-    <#  截窗口（屏幕真实像素，不是 PrintWindow）。
-        WebView2 走 GPU 合成，PrintWindow 抓出来常常是空白。 #>
+    <#  截窗口。**优先用 PrintWindow，不要求窗口在前台。**
+
+        原来是屏幕取图（CopyFromScreen），因此必须先把窗口提到最前面；
+        而抢前台在「他正在用电脑」的时候会失败——失败的表现是**截到别人的窗口**，
+        然后一堆检查报「顶栏坏了 / 最右墨迹离边一千像素」，长得像 CSS 回归。
+        这种假失败比没有测试更糟。
+
+        当初不用 PrintWindow 是因为「WebView2 走 GPU 合成，抓出来是空白」。
+        那是老经验：Windows 10 1809 之后 PrintWindow 支持 PW_RENDERFULLCONTENT(2)，
+        对 GPU 合成的窗口一样能抓。这里先试它，**抓出来不是空白就用**；
+        真空白（老系统）再退回屏幕取图，并在返回对象上标明，
+        免得把「截了个空窗」当成「界面是空的」。#>
     param([Parameter(Mandatory)][string]$Path)
     $g = Get-WindowGeometry
     if (-not $g.FrameW) { throw "窗口尺寸为 0" }
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+
+    $bmp = New-Object System.Drawing.Bitmap($g.FrameW, $g.FrameH)
+    $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+    $hdc = $gfx.GetHdc()
+    $ok = [BaselineUi]::PrintWindow($g.Handle, $hdc, 2)
+    $gfx.ReleaseHdc($hdc)
+    $gfx.Dispose()
+
+    if ($ok -and (Test-NotBlank -Bitmap $bmp)) {
+        $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bmp.Dispose()
+        return Get-Item $Path
+    }
+    $bmp.Dispose()
+
+    if (-not (Test-IsForeground)) {
+        throw "PrintWindow 抓不到内容，而且窗口不在前台——这一张不可信，没有保存。"
+    }
     $bmp = New-Object System.Drawing.Bitmap($g.FrameW, $g.FrameH)
     $gfx = [System.Drawing.Graphics]::FromImage($bmp)
     $gfx.CopyFromScreen($g.FrameLeft, $g.FrameTop, 0, 0,
                         (New-Object System.Drawing.Size($g.FrameW, $g.FrameH)))
-    $dir = Split-Path -Parent $Path
-    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
     $gfx.Dispose(); $bmp.Dispose()
     Get-Item $Path
+}
+
+function Test-NotBlank {
+    <#  一张图是不是「基本单一颜色」。抽样即可——全白/全黑是 PrintWindow
+        失败唯一的表现形式，不需要精确判断。 #>
+    param([Parameter(Mandatory)]$Bitmap)
+    $seen = @{}
+    for ($y = 0; $y -lt $Bitmap.Height; $y += [math]::Max(1, [int]($Bitmap.Height / 40))) {
+        for ($x = 0; $x -lt $Bitmap.Width; $x += [math]::Max(1, [int]($Bitmap.Width / 40))) {
+            $seen[$Bitmap.GetPixel($x, $y).ToArgb()] = $true
+            if ($seen.Count -gt 3) { return $true }
+        }
+    }
+    return $false
 }
 
 function Set-WindowFocus {

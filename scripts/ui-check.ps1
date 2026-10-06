@@ -54,7 +54,25 @@ Write-Output ""
 Write-Output "窗口 $([int]$geom0.CssWidth)x$([int]$geom0.CssHeight) CSS，DPI 缩放 $($geom0.Scale)"
 
 try {
-    [void](Set-WindowFocus)
+    # **先抢前台，再截任何一张图。**
+    #
+    # Save-Shot 是屏幕取图（WebView2 走 GPU 合成，PrintWindow 抓出来是空白），
+    # 所以窗口不在最前面时，截到的是别人的窗口。那种失败长得非常像
+    # 「顶栏坏了」——最右墨迹离边缘一千多像素、左半边全是墨迹——
+    # 会把人骗去查 CSS。所以这里抢到为止，抢不到就直说，
+    # 而不是把一堆不可信的截图当成失败结果报出去。
+    $fg = $false
+    for ($i = 0; $i -lt 8 -and -not $fg; $i++) {
+        $fg = Set-WindowFocus
+        if (-not $fg) { Start-Sleep -Milliseconds 400 }
+    }
+    if (-not $fg) {
+        Write-Output ""
+        Write-Output "拿不到前台窗口，截图不可信，这一轮没跑。"
+        Write-Output "Save-Shot 是屏幕取图，需要窗口在最前面——先别动鼠标键盘再试一次。"
+        exit 2
+    }
+
     $p = Get-AppWindow
     Check '进程有窗口' ($p.Handle -ne [IntPtr]::Zero) "pid $($p.Id) hwnd 0x$([int64]$p.Handle)"
 

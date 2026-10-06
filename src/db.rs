@@ -79,11 +79,11 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_sources_goal ON sources(goal_id);
 
         -- 一条推进。value 默认 1，即「一次打卡 = 一个单位」。
-        -- goal_id 可空：允许「记了一条，但还没想好它推进哪个目标」。
-        -- 没关联的记录不进任何一条曲线，但它确实发生过。
+        -- **没有 goal_id 列**：一条记录可以同时推进好几个目标，所以关联在
+        -- checkin_goals 那张表里。一条都没关联也是合法的——记下来是第一步，
+        -- 归到哪个目标是第二步。
         CREATE TABLE IF NOT EXISTS checkins (
             id         INTEGER PRIMARY KEY,
-            goal_id    INTEGER REFERENCES goals(id) ON DELETE CASCADE,
             source_id  INTEGER REFERENCES sources(id) ON DELETE SET NULL,
             day        TEXT NOT NULL,
             time       TEXT NOT NULL,
@@ -91,7 +91,19 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             note       TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_checkins_goal_day ON checkins(goal_id, day);
+        CREATE INDEX IF NOT EXISTS idx_checkins_day ON checkins(day);
+
+        -- 记录 ↔ 目标。多对多：一次做的事可能同时推进好几个目标。
+        --
+        -- **有这条关联 ≠ 计分。** 手工记录只推动「规则里含手工打卡」的目标；
+        -- 关联到一条 git 提交规则的目标上是记下「我本来想推进它」，
+        -- 不进那条曲线。判定在 cumulative_* 里，不在这里——这样菜单能列全所有目标。
+        CREATE TABLE IF NOT EXISTS checkin_goals (
+            checkin_id INTEGER NOT NULL REFERENCES checkins(id) ON DELETE CASCADE,
+            goal_id    INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            PRIMARY KEY (checkin_id, goal_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_checkin_goals_goal ON checkin_goals(goal_id);
 
         -- 每日快照。**过去的日子写入后不再改写；今天可以重算**（见 snapshot_put_today）。
         CREATE TABLE IF NOT EXISTS snapshots (
@@ -107,6 +119,38 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         params![SCHEMA_VERSION.to_string()],
     )?;
     relax_checkin_goal(conn)?;
+    split_checkin_goals(conn)?;
+    Ok(())
+}
+
+/// 迁移：把 `checkins.goal_id` 拆成 `checkin_goals` 关联表（2026-10-06）。
+///
+/// 一条记录要能同时关联多个目标，单列装不下。判据是**那一列还在不在**，
+/// 不在就是迁移过了——不用版本号（建表全是 IF NOT EXISTS，版本号区分不开）。
+/// SQLite 3.35+ 支持 DROP COLUMN，所以不用重建表。
+fn split_checkin_goals(conn: &Connection) -> Result<()> {
+    let has_col: i64 = conn.query_row(
+        r#"SELECT COUNT(*) FROM pragma_table_info('checkins') WHERE name = 'goal_id'"#,
+        [],
+        |r| r.get(0),
+    )?;
+    if has_col == 0 {
+        return Ok(());
+    }
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    let r = conn.execute_batch(
+        r#"
+        BEGIN;
+        INSERT OR IGNORE INTO checkin_goals(checkin_id, goal_id)
+            SELECT id, goal_id FROM checkins WHERE goal_id IS NOT NULL;
+        DROP INDEX IF EXISTS idx_checkins_goal_day;
+        ALTER TABLE checkins DROP COLUMN goal_id;
+        CREATE INDEX IF NOT EXISTS idx_checkins_day ON checkins(day);
+        COMMIT;
+        "#,
+    );
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    r.context("迁移 checkins.goal_id 到 checkin_goals 失败")?;
     Ok(())
 }
 
@@ -274,9 +318,11 @@ pub fn goal_delete(conn: &Connection, id: i64) -> Result<()> {
     Ok(())
 }
 
+/// 挂在某个目标上的记录条数。**算关联，不算计分**——
+/// 删除的判据是「有没有人声称这条线是自己的」，而不是「这条线动没动过」。
 pub fn checkin_count(conn: &Connection, goal_id: i64) -> Result<i64> {
     Ok(conn.query_row(
-        "SELECT COUNT(*) FROM checkins WHERE goal_id=?1",
+        "SELECT COUNT(*) FROM checkin_goals WHERE goal_id=?1",
         params![goal_id],
         |r| r.get(0),
     )?)
@@ -410,9 +456,12 @@ pub fn goals_without_rule(conn: &Connection) -> Result<Vec<Goal>> {
 
 // ---------------------------------------------------------------- Checkin
 
+/// 记一条推进，并挂到若干个目标上（`goal_ids` 可以是空的 = 不关联）。
+///
+/// 关联只表示「我本来想推进它」，**不表示计分**——计分在 `cumulative_*` 里按规则判。
 pub fn checkin_add(
     conn: &Connection,
-    goal_id: Option<i64>,
+    goal_ids: &[i64],
     source_id: Option<i64>,
     day: &str,
     time: &str,
@@ -421,30 +470,79 @@ pub fn checkin_add(
     now: &str,
 ) -> Result<i64> {
     conn.execute(
-        "INSERT INTO checkins(goal_id, source_id, day, time, value, note, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![goal_id, source_id, day, time, value, note, now],
+        "INSERT INTO checkins(source_id, day, time, value, note, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![source_id, day, time, value, note, now],
     )?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    for g in goal_ids {
+        conn.execute(
+            "INSERT OR IGNORE INTO checkin_goals(checkin_id, goal_id) VALUES (?1, ?2)",
+            params![id, g],
+        )?;
+    }
+    Ok(id)
 }
 
+/// checkin_id -> 挂着的目标 id（按 goal_id 排序，渲染顺序才稳定）。
+fn links_by_checkin(conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<i64>>> {
+    let mut stmt =
+        conn.prepare("SELECT checkin_id, goal_id FROM checkin_goals ORDER BY checkin_id, goal_id")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+    let mut m: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
+    for row in rows {
+        let (c, g) = row?;
+        m.entry(c).or_default().push(g);
+    }
+    Ok(m)
+}
+
+fn collect_checkins(
+    conn: &Connection,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<Checkin>> {
+    let links = links_by_checkin(conn)?;
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(args, |r| {
+        Ok(Checkin {
+            id: r.get(0)?,
+            goal_ids: Vec::new(),
+            day: r.get(1)?,
+            time: r.get(2)?,
+            value: r.get(3)?,
+            note: r.get(4)?,
+        })
+    })?;
+    let mut out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    for c in &mut out {
+        c.goal_ids = links.get(&c.id).cloned().unwrap_or_default();
+    }
+    Ok(out)
+}
+
+/// 挂到某个目标上的全部记录（**不管计不计分**）。详情页的流水用它。
 pub fn checkins_of(conn: &Connection, goal_id: i64) -> Result<Vec<Checkin>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, goal_id, day, time, value, note FROM checkins
-         WHERE goal_id=?1 ORDER BY day, time, id",
-    )?;
-    let rows = stmt.query_map(params![goal_id], row_to_checkin)?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let args: [&dyn rusqlite::ToSql; 1] = [&goal_id];
+    collect_checkins(
+        conn,
+        "SELECT c.id, c.day, c.time, c.value, c.note FROM checkins c
+         JOIN checkin_goals cg ON cg.checkin_id = c.id
+         WHERE cg.goal_id = ?1 ORDER BY c.day, c.time, c.id",
+        &args,
+    )
 }
 
 /// 全部打卡，倒序。
 pub fn checkins_recent(conn: &Connection, limit: usize) -> Result<Vec<Checkin>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, goal_id, day, time, value, note FROM checkins
+    let lim = limit as i64;
+    let args: [&dyn rusqlite::ToSql; 1] = [&lim];
+    collect_checkins(
+        conn,
+        "SELECT id, day, time, value, note FROM checkins
          ORDER BY day DESC, time DESC, id DESC LIMIT ?1",
-    )?;
-    let rows = stmt.query_map(params![limit as i64], row_to_checkin)?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        &args,
+    )
 }
 
 /// 全部打卡，**正序**。
@@ -453,29 +551,35 @@ pub fn checkins_recent(conn: &Connection, limit: usize) -> Result<Vec<Checkin>> 
 /// 不设 LIMIT：单用户、一天几条，量级很小；真要大到需要截断，
 /// 该处理的是「怎么让用户看到更早的」，而不是在这里悄悄丢数据。
 pub fn checkins_all(conn: &Connection) -> Result<Vec<Checkin>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, goal_id, day, time, value, note FROM checkins
-         ORDER BY day, time, id",
+    collect_checkins(
+        conn,
+        "SELECT id, day, time, value, note FROM checkins ORDER BY day, time, id",
+        &[],
+    )
+}
+
+/// 这条规则接不接受手工记录。**只有含手工打卡来源的目标，手工记录才算数。**
+///
+/// 设计文档 §5.3 的例子 C：在 Learn-English 上写代码不能推动「英语」那条线——
+/// 那条线的规则是「只算复习记录」。允许手工记录推动任何目标，
+/// 卡片底下印着的那条规则就不再决定曲线了。
+fn manual_counts(conn: &Connection, goal_id: i64) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sources WHERE goal_id=?1 AND kind='manual_checkin'",
+        params![goal_id],
+        |r| r.get(0),
     )?;
-    let rows = stmt.query_map([], row_to_checkin)?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    Ok(n > 0)
 }
 
-fn row_to_checkin(r: &rusqlite::Row) -> rusqlite::Result<Checkin> {
-    Ok(Checkin {
-        id: r.get(0)?,
-        goal_id: r.get(1)?,
-        day: r.get(2)?,
-        time: r.get(3)?,
-        value: r.get(4)?,
-        note: r.get(5)?,
-    })
-}
-
-/// 目标当前的累计值。= 所有打卡 value 之和。
+/// 目标当前的累计值。
 pub fn cumulative_now(conn: &Connection, goal_id: i64) -> Result<f64> {
+    if !manual_counts(conn, goal_id)? {
+        return Ok(0.0);
+    }
     let v: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(value), 0) FROM checkins WHERE goal_id=?1",
+        "SELECT COALESCE(SUM(c.value), 0) FROM checkins c
+         JOIN checkin_goals cg ON cg.checkin_id = c.id WHERE cg.goal_id=?1",
         params![goal_id],
         |r| r.get(0),
     )?;
@@ -484,8 +588,13 @@ pub fn cumulative_now(conn: &Connection, goal_id: i64) -> Result<f64> {
 
 /// 截止某天的累计值。
 pub fn cumulative_until(conn: &Connection, goal_id: i64, day: &str) -> Result<f64> {
+    if !manual_counts(conn, goal_id)? {
+        return Ok(0.0);
+    }
     let v: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(value), 0) FROM checkins WHERE goal_id=?1 AND day<=?2",
+        "SELECT COALESCE(SUM(c.value), 0) FROM checkins c
+         JOIN checkin_goals cg ON cg.checkin_id = c.id
+         WHERE cg.goal_id=?1 AND c.day<=?2",
         params![goal_id, day],
         |r| r.get(0),
     )?;
@@ -493,10 +602,16 @@ pub fn cumulative_until(conn: &Connection, goal_id: i64, day: &str) -> Result<f6
 }
 
 /// 目标下最早的打卡日期。没有则 None。
+///
+/// **这里不判「计不计分」**，只看有没有人挂上来过。`has_data` 用它决定
+/// 「画曲线还是画空状态」——加了规则判断的话，一条 `external_metric` 目标
+/// 会因为「手工记录不算数」而显示「还没有任何记录」，旁边却顶着一个数字，
+/// 两句话当场打架。（踩过。）
 pub fn first_checkin_day(conn: &Connection, goal_id: i64) -> Result<Option<String>> {
     Ok(conn
         .query_row(
-            "SELECT MIN(day) FROM checkins WHERE goal_id=?1",
+            "SELECT MIN(c.day) FROM checkins c
+             JOIN checkin_goals cg ON cg.checkin_id = c.id WHERE cg.goal_id=?1",
             params![goal_id],
             |r| r.get::<_, Option<String>>(0),
         )

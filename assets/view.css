@@ -180,39 +180,66 @@ body{
   max-height:160px; overflow-y:auto;
 }
 .composer textarea::placeholder{color:var(--tx-3)}
-.composer .crow{display:flex; align-items:center; justify-content:space-between; gap:8px}
+.composer .crow{display:flex; align-items:center; gap:8px}
 
-/* 目标按钮：一个安静的胶囊，带一个色点。点开是一列目标 + 「不关联目标」。 */
-.composer .gbtn{
-  display:inline-flex; align-items:center; gap:7px; min-width:0;
-  background:none; border:1px solid transparent; border-radius:99px;
-  padding:4px 10px 4px 7px; font:inherit; font-size:12px; color:var(--tx-3);
-  cursor:default;
+/* 目标标签：**列全所有目标**，点一下选中、再点一下取消，可以多选。
+   一行放不下就整排收起来，只留「…」——由 JS 量完宽度决定（见 fitChips）。 */
+.composer .gchips{
+  flex:1; min-width:0; display:flex; align-items:center; gap:5px;
+  overflow:hidden;
 }
-.composer .gbtn:hover{border-color:var(--bd-2); color:var(--tx-2)}
-.composer .gbtn .dot{width:7px; height:7px; border-radius:50%; flex:none; background:var(--bd-2)}
-.composer .gbtn .dot.none{background:transparent; box-shadow:inset 0 0 0 1.5px var(--bd-2)}
-.composer .gbtn span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.composer .gchips[hidden]{display:none}
+.composer .gchip{
+  display:inline-flex; align-items:center; gap:6px; flex:none;
+  background:none; border:1px solid transparent; border-radius:99px;
+  padding:4px 10px 4px 8px; font:inherit; font-size:12px; color:var(--tx-3);
+  cursor:default; white-space:nowrap;
+}
+.composer .gchip i{width:7px; height:7px; border-radius:50%; flex:none;
+  background:transparent; box-shadow:inset 0 0 0 1.5px var(--bd-2)}
+.composer .gchip:hover{border-color:var(--bd-2); color:var(--tx-2)}
+/* 选中：实心点 + 目标自己的底色。没选中的一律是空心点。 */
+.composer .gchip.on{background:var(--cbg); border-color:var(--cbd); color:var(--ctx);
+  font-weight:650}
+.composer .gchip.on i{background:var(--c); box-shadow:none}
+/* 规则里没有手工打卡的目标：标签画成虚线，选得中但不计分。 */
+.composer .gchip.noscore.on{border-style:dashed}
+
+.composer .gmore{
+  flex:none; background:none; border:1px solid var(--bd-2); border-radius:99px;
+  padding:4px 11px; font:inherit; font-size:13px; line-height:1.2;
+  color:var(--tx-3); cursor:default;
+}
+.composer .gmore:hover{border-color:var(--tx-3); color:var(--tx-2)}
+.composer .gmore.on{border-color:var(--cbd); background:var(--sf-2); color:var(--tx)}
+.composer .gmore[hidden]{display:none}
 
 /* 往上弹，不往下：下面是窗口边缘。 */
 .composer .gmenu{
   position:absolute; left:calc(var(--pad) + var(--outer)); bottom:100%;
-  margin-bottom:6px; min-width:190px; max-width:320px;
+  margin-bottom:6px; min-width:230px; max-width:420px;
   background:var(--sf); border:1px solid var(--bd-2); border-radius:12px;
-  padding:5px; box-shadow:0 8px 24px rgba(0,0,0,.09); z-index:20;
+  padding:6px; box-shadow:0 8px 24px rgba(0,0,0,.09); z-index:20;
   display:flex; flex-direction:column; gap:1px;
 }
 .composer .gmenu[hidden]{display:none}
+.composer .gmenu-h{padding:6px 9px 8px; font-size:11.5px; color:var(--tx-3);
+  border-bottom:1px solid var(--bd); margin-bottom:4px}
+.composer .gmenu-h span{display:block; color:var(--tx-3); opacity:.8}
 .composer .gopt{
   display:flex; align-items:center; gap:8px; text-align:left;
   background:none; border:0; border-radius:8px; padding:7px 9px;
   font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default;
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
 .composer .gopt:hover{background:var(--sf-2)}
 .composer .gopt.on{color:var(--tx); font-weight:650; background:var(--sf-2)}
-.composer .gopt i{width:7px; height:7px; border-radius:50%; flex:none; background:var(--c)}
-.composer .gopt.none i{background:transparent; box-shadow:inset 0 0 0 1.5px var(--bd-2)}
+.composer .gopt i{width:8px; height:8px; border-radius:50%; flex:none;
+  background:transparent; box-shadow:inset 0 0 0 1.5px var(--bd-2)}
+.composer .gopt.on i{background:var(--c); box-shadow:none}
+.composer .gopt.noscore.on i{background:transparent; box-shadow:inset 0 0 0 2px var(--c)}
+.composer .gopt .gn{flex:none}
+.composer .gopt em{margin-left:auto; padding-left:10px; font-style:normal;
+  font-size:11px; color:var(--tx-3); font-weight:400}
 
 .composer .send{
   flex:none;
@@ -228,8 +255,13 @@ body{
 
 /* 流水的一行。高度必须是**固定值**——虚拟滚动靠它算总高和偏移，
    行高一变，滚动位置就会飘。所以备注不换行，超长省略（悬停看全文）。 */
-.day{height:var(--row-day); display:flex; align-items:flex-end;
-  padding:0 0 7px 2px}
+/* 日期用的是**和下面记录同一个 46px 时间列**，右对齐。
+   两条竖轴对齐之后，扫一列日期和扫一列时间才是同一个动作；
+   原来日期从行首起、时间右对齐到 46px，看着就是「偏左一点」，
+   而那一点说不清差在哪。 */
+.day{height:var(--row-day); display:grid;
+  grid-template-columns:46px 22px 1fr auto; gap:10px; align-items:end;
+  padding:0 0 7px}
 .entry{height:var(--row-entry); display:grid;
   grid-template-columns:46px 22px 1fr auto; gap:10px; align-items:start;
   padding-top:6px}
@@ -319,6 +351,10 @@ button.kind.on{border-color:var(--tx-3); background:var(--sf-2)}
 .dlg .bad{border-color:var(--bd-2); background:var(--sf-2); color:var(--tx-2)}
 
 
+/* 页面里的链接一律不带下划线（默认那条是浏览器的，和我们这套字重不搭）。
+   需要提示「这是链接」的地方自己写 hover。 */
+a{color:inherit; text-decoration:none}
+
 /* ---------------- 目标卡 ---------------- */
 .card{background:var(--cbg);border:1px solid var(--cbd);border-radius:13px;
   padding:15px 16px 13px}
@@ -342,9 +378,8 @@ a.card:focus-visible{outline:2px solid var(--c);outline-offset:2px}
 .cv-line{fill:none;stroke:var(--c);stroke-width:2;stroke-linejoin:round;
   vector-effect:non-scaling-stroke}
 .cv-base{stroke:var(--cbd);stroke-width:1;vector-effect:non-scaling-stroke}
-.cv-dot{fill:var(--c)}
-.cv-mark{fill:var(--c)}
-.cv-halo{fill:var(--c);opacity:.18}
+/* 曲线的三层圆点（破零点光晕、破零点、线尾）都去掉了，样式一并删干净——
+   留着死规则，下次改曲线的人会以为还有东西在用它们。 */
 .cempty{height:44px;margin-bottom:11px;display:flex;align-items:center;
   font-size:11.5px;color:var(--tx-3);border-bottom:1px dashed var(--cbd)}
 
@@ -364,9 +399,9 @@ a.card:focus-visible{outline:2px solid var(--c);outline-offset:2px}
 
 /* ---------------- 时间线（流水） ---------------- */
 /* 行的内容——高度已经在上面定死了，这里只管里面怎么排。 */
-.dlabel{display:flex;align-items:baseline;gap:9px;padding-left:2px}
-.dl{font-size:13px;font-weight:700}
-.dd{font-size:11.5px;color:var(--tx-3);font-variant-numeric:tabular-nums}
+.dlabel{grid-column:1 / 3; display:flex; align-items:baseline; gap:10px;
+  width:max-content}
+.dl{width:46px; flex:none; text-align:right; font-size:13px; font-weight:700}
 .dw{font-size:11.5px;color:var(--tx-3)}
 
 .time{font-size:11.5px;color:var(--tx-3);font-variant-numeric:tabular-nums;
@@ -389,6 +424,9 @@ a.card:focus-visible{outline:2px solid var(--c);outline-offset:2px}
 .chip{font-size:11px;font-weight:650;padding:3px 9px;border-radius:99px;
   background:var(--cbg);color:var(--ctx);border:1px solid var(--cbd);white-space:nowrap}
 .chip.none{background:transparent;color:var(--tx-3);border-style:dashed}
+/* 挂着但这条规则不接受手工记录：虚线 + 说明。挂着 ≠ 计分。 */
+.chip.noscore{border-style:dashed;background:transparent;color:var(--tx-3)}
+.chip.noscore::after{content:"·不计入";opacity:.75}
 
 .nogoal{padding:2px 2px 10px;color:var(--tx-3);font-size:13px;line-height:1.9}
 
@@ -408,60 +446,57 @@ a.card:focus-visible{outline:2px solid var(--c);outline-offset:2px}
   border:1px solid var(--bd);border-radius:10px;padding:14px 16px;
   white-space:pre-wrap;word-break:break-word}
 
-/* ---------------- 目标详情 ---------------- */
-/* 点卡片进来的。整个窗口只显示这一个目标，所以不再分两栏——
-   这一屏是「我在看这个目标」，不是「我在扫全部」。 */
-.detail{flex:1; min-height:0; overflow-y:auto; padding:4px 0 40px}
-.dinner{max-width:760px; margin:0 auto; padding:0 30px}
+/* ---------------- 目标详情（布局 C）---------------- */
+/* 点卡片进来的。整个窗口只显示这一个目标。
+   结构：整宽头部（曲线是主角）+ 下面「规则 | 记录」两栏。
+   两栏各自滚动，所以头部不会随着记录翻上去——翻到第 200 条，
+   那条曲线和当前值还在原地。 */
+.detail{flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden}
+
+/* ---- 整宽头部 ---- */
+/* 详情页用**固定边距**，不用 --outer。
+   --outer 是「把 1120 的内容列居中」，窗口越宽它越大；两栏布局里它会把
+   左栏的内边距撑到 300px 以上，把那一栏挤成一字宽（全屏时踩过）。
+   这一屏本来就是整宽的一屏，不套 1120 那个网格。 */
+.hero{flex:none; background:var(--sf); border-bottom:1px solid var(--bd);
+  padding:16px 30px 18px}
+/* 右边那个当前值对齐**左栏的底边**（也就是 why 那一行的底部），不是对齐顶部。
+   顶对齐时它悬在标题旁边，看着像浮在半空；底对齐之后它是这一块的落脚点。 */
+.hero-top{display:flex; align-items:flex-end; justify-content:space-between; gap:40px}
+.dtitle{display:flex; align-items:center; gap:11px; font-size:28px; font-weight:700;
+  letter-spacing:-.03em; line-height:1.15}
+.dtitle i{width:13px; height:13px; border-radius:3.5px; background:var(--c); flex:none}
+.dcur{flex:none; display:flex; align-items:baseline; gap:8px}
+.dval{font-size:56px; font-weight:750; color:var(--c);
+  font-variant-numeric:tabular-nums; letter-spacing:-.05em; line-height:1}
+.dval.zero{color:var(--tx-3); font-weight:400}
+.unit{font-size:13px; color:var(--tx-3)}
+
+.dcurve{margin-top:16px}
+.dcurve svg{width:100%; height:116px; display:block}
+.cv-foot{display:flex; justify-content:space-between; margin-top:6px;
+  font-size:10.5px; color:var(--tx-3); font-family:var(--ff-mono)}
 
 .back{
   display:inline-flex; align-items:center; gap:6px;
-  background:none; border:0; padding:4px 8px 4px 0; margin-bottom:14px;
+  background:none; border:0; padding:0 8px 0 0; margin-bottom:12px;
   font:inherit; font-size:12.5px; color:var(--tx-3); cursor:default;
+  text-decoration:none;
 }
-.back:hover{color:var(--tx)}
+.back:hover{color:var(--tx); text-decoration:underline}
 
-.dhead{display:flex; align-items:center; justify-content:space-between; gap:12px}
-.dtitle{display:flex; align-items:center; gap:9px; font-size:20px; font-weight:700;
-  letter-spacing:-.02em}
-.dtitle i{width:11px; height:11px; border-radius:3px; background:var(--c); flex:none}
-.dval{font-size:22px; font-weight:750; color:var(--c);
-  font-variant-numeric:tabular-nums; letter-spacing:-.03em}
-.dval.zero{color:var(--tx-3); font-weight:400}
-.dwhy{margin-top:6px; font-size:13px; color:var(--tx-2); line-height:1.8}
-.dcurve{margin-top:16px}
-.dcurve svg{height:96px}
-
-.dsec{margin-top:30px; border-top:1px solid var(--bd); padding-top:16px}
-.dsec h3{font-size:12.5px; font-weight:700; color:var(--tx-2); margin-bottom:10px}
-.dsec h3 span{font-weight:400; color:var(--tx-3); margin-left:6px}
-
-.rule{
-  display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
-  padding:9px 0; border-bottom:1px solid var(--bd);
-}
-.rule:last-of-type{border-bottom:0}
-.rule .rkind{font-size:13px; font-weight:650; color:var(--tx)}
-.rule .rtarget{font-size:11.5px; color:var(--tx-3); margin-top:1px}
-.rule .rwhy{font-size:12.5px; color:var(--tx-2); margin-top:3px; line-height:1.7}
-.rule .x{
-  flex:none; background:none; border:0; padding:2px 4px;
-  font:inherit; font-size:11.5px; color:var(--tx-3); cursor:default;
-}
-.rule .x:hover{color:var(--tx)}
-
-.dacts{display:flex; gap:8px; flex-wrap:wrap; margin-top:30px;
-  border-top:1px solid var(--bd); padding-top:16px}
-.dacts button{
-  background:none; border:1px solid var(--bd-2); border-radius:10px;
-  padding:8px 14px; font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default;
-}
-.dacts button:hover{border-color:var(--tx-3); color:var(--tx)}
-.dacts button[disabled]{opacity:.4}
-.dacts button[disabled]:hover{border-color:var(--bd-2); color:var(--tx-2)}
-.dacts button.danger:hover{border-color:var(--rose); color:var(--rose-tx)}
-/* 两步确认的中间态：按钮自己变成问句，且明显不一样。 */
-.dacts button.armed{border-color:var(--rose); color:var(--rose-tx)}
+/* ---- 下面两栏：规则 | 记录 ---- */
+.panes{flex:1; min-height:0; display:grid; grid-template-columns:minmax(300px,380px) 1fr}
+.pane{min-height:0; min-width:0; overflow-y:auto; overflow-x:hidden;
+  scrollbar-gutter:stable; padding:20px 0 48px}
+/* 左栏的内容从 30px 起（和上面的 hero 同一条竖线），右栏从分隔线往里让 34px。 */
+.pane.rules{border-right:1px solid var(--bd); padding-left:30px; padding-right:26px}
+.pane.recs{display:flex; flex-direction:column; overflow:hidden; padding-left:34px}
+/* 中间还隔着一层 .dsec —— 不给它 flex:1，下面的 .dlog 就撑不开也压不住。 */
+.pane.recs .dsec{flex:1; min-height:0; display:flex; flex-direction:column}
+.pane.recs .dsec h3,.pane.recs .hint{flex:none; padding-right:30px}
+/* 左栏比右栏短很多时，别让「修改/归档/删除」掉到视野外 */
+.pane.rules{padding-bottom:60px}
 
 .field{margin-bottom:12px}
 .field label{display:block; font-size:11.5px; color:var(--tx-3); margin-bottom:5px}
@@ -471,22 +506,90 @@ a.card:focus-visible{outline:2px solid var(--c);outline-offset:2px}
   resize:none;
 }
 .field input:focus,.field textarea:focus{border-color:var(--blue)}
-.hint{font-size:12px; color:var(--tx-3); line-height:1.8; margin-top:8px}
+.hint{font-size:11.5px; color:var(--tx-3); line-height:1.7; margin-top:10px}
 .warnline{margin-top:14px; padding:11px 14px; background:#fffbeb;
   border-left:3px solid var(--amber); border-radius:0 10px 10px 0;
   font-size:12.5px; color:var(--amber-tx); line-height:1.75}
-.dlog{max-height:44vh; min-height:120px; overflow-y:auto; overflow-x:hidden;
-  scrollbar-gutter:stable; border-top:1px solid var(--bd)}
-/* 注意别去改 .entry 的高度：虚拟滚动靠固定行高算总高和偏移，
-   在这里把 height 改成 auto 会让行高随内容变，滚动位置立刻开始飘。 */
+
+/* 记录区不再是「页面里的一个盒子」，它就是这一栏本身——所以它得把
+   标题下面剩下的高度全占掉，并且自己滚（见上面 .pane.recs 的注释）。
+   右内边距加在滚动容器自己身上，滚动条才会贴住窗口右边缘。 */
+.dlog{flex:1; min-height:0; overflow-y:auto; overflow-x:hidden;
+  scrollbar-gutter:stable; padding-right:30px}
+
+.dsec h3{font-size:12.5px; font-weight:700; color:var(--tx-2); margin-bottom:8px}
+.dsec h3 span{font-weight:400; color:var(--tx-3); margin-left:6px}
+.dwhy{margin-top:8px; font-size:13px; color:var(--tx-2); line-height:1.7}
+
+.rule{display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+  padding:10px 0; border-bottom:1px solid var(--bd)}
+.rule:last-of-type{border-bottom:0}
+.rule .rkind{font-size:13px; font-weight:650; color:var(--tx)}
+.rule .rtarget{font-size:11.5px; color:var(--tx-3); margin-top:1px}
+.rule .rwhy{font-size:12.5px; color:var(--tx-2); margin-top:3px; line-height:1.7}
+.rule .x{flex:none; background:none; border:0; padding:2px 4px;
+  font:inherit; font-size:11.5px; color:var(--tx-3); cursor:default}
+.rule .x:hover{color:var(--tx)}
+.addrule{display:inline-flex; align-items:center; gap:6px; margin-top:10px;
+  background:none; border:1px dashed var(--bd-2); border-radius:10px;
+  padding:7px 12px; font:inherit; font-size:12.5px; color:var(--tx-3); cursor:default}
+.addrule:hover{border-color:var(--tx-3); color:var(--tx-2)}
+
+.dacts{display:flex; gap:8px; flex-wrap:wrap; margin-top:30px;
+  border-top:1px solid var(--bd); padding-top:16px}
+.dacts button{background:none; border:1px solid var(--bd-2); border-radius:10px;
+  padding:8px 14px; font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default}
+.dacts button:hover{border-color:var(--tx-3); color:var(--tx)}
+.dacts button[disabled]{opacity:.4}
+.dacts button[disabled]:hover{border-color:var(--bd-2); color:var(--tx-2)}
+.dacts button.danger:hover{border-color:var(--rose); color:var(--rose-tx)}
+.dacts button.armed{border-color:var(--rose); color:var(--rose-tx)}
+
+/* ---------------- 模态确认框 ---------------- */
+/* 危险动作（删规则、删目标）一律走这里。
+   原来删除是「按钮原地变成问句、再点一下」：不用弹窗，但**问句写在按钮上**，
+   正在读别处的人得先注意到按钮变了。模态把「要删的是什么」摆在眼前，
+   代价是打断一次——删除值得这一次打断。 */
+.modal{position:fixed; inset:0; z-index:100; display:flex;
+  align-items:center; justify-content:center; background:rgba(28,26,23,.32)}
+.modal[hidden]{display:none}
+.mbox{width:min(430px, calc(100vw - 60px)); background:var(--sf);
+  border:1px solid var(--bd-2); border-radius:14px; padding:20px 22px 16px;
+  box-shadow:0 18px 48px rgba(0,0,0,.18)}
+.mbox h3{font-size:15px; font-weight:700; margin-bottom:8px}
+.mbox p{font-size:13px; color:var(--tx-2); line-height:1.75}
+.mbox .mwhat{margin-top:12px; padding:9px 12px; border-radius:9px;
+  background:var(--sf-2); font-size:12.5px; color:var(--tx-2);
+  word-break:break-word}
+.macts{display:flex; justify-content:flex-end; gap:8px; margin-top:18px}
+.macts button{background:none; border:1px solid var(--bd-2); border-radius:10px;
+  padding:8px 14px; font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default}
+.macts button:hover{border-color:var(--tx-3); color:var(--tx)}
+.macts button.danger{border-color:var(--rose); color:var(--rose-tx)}
+.macts button.danger:hover{background:var(--rose-bg)}
 
 @media(max-width:940px){
-  /* 窄到放不下两栏时改成整页滚动，两栏各自滚就没有意义了，
-     滚动条也回到页面边缘，不必再往窗口边上贴。 */
-  .cols{grid-template-columns:1fr;overflow-y:auto;
-    padding:10px var(--pad) 0}
-  .left,.right{overflow:visible;padding:0}
-  .goals{overflow:visible;padding-bottom:12px}
-  .log{overflow:visible;padding-bottom:12px}
-  .right{padding-bottom:24px}
+  /* 窄到放不下两栏：整页滚，两栏各自滚就没意义了。
+     滚动条回到页面边缘，不必再往窗口边上贴。
+
+     **两栏都改成 display:block。** 只把 grid 改成单列是不够的：
+     .left/.right 还是 flex 容器，里面的 .goals/.log 是 flex:1 + overflow:visible，
+     内容会越过自己那一行叠到下一行上（窄屏实测：卡片压在日志上）。
+     块级流没有这个问题——高度就是内容高度。 */
+  .cols{display:block; overflow-y:auto; padding:10px var(--pad) 0}
+  .left,.right{display:block}
+  .goals,.log{height:auto; overflow:visible; padding-bottom:0; padding-right:0}
+  .addgoal{margin:16px 0 18px}
+  /* 输入框吸在底部：窄屏下它是唯一一直在用的东西，不该跟着滚走。 */
+  .composer{position:sticky; bottom:0; padding:10px 0 14px; background:var(--bg)}
+
+  /* 详情页同理：单列之后不能再靠 grid 自动行高 + flex:1。 */
+  .hero{padding:14px var(--pad) 16px}
+  .hero-top{flex-direction:column; gap:12px}
+  .panes{display:block; overflow-y:auto}
+  .pane{display:block; overflow:visible; padding:18px var(--pad) 0}
+  .pane.rules{border-right:0; border-bottom:1px solid var(--bd); padding-bottom:18px}
+  .pane.recs{padding-left:var(--pad)}
+  .pane.recs .dsec{display:block}
+  .dlog{height:auto; max-height:none; overflow:visible; padding-right:0}
 }

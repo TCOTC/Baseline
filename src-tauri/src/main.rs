@@ -191,21 +191,22 @@ fn err(e: anyhow::Error) -> String {
 #[tauri::command]
 fn add_checkin(
     state: tauri::State<'_, AppDb>,
-    goal_id: Option<i64>,
+    goal_ids: Vec<i64>,
     note: String,
 ) -> Result<(), String> {
     let conn = db::open(&state.0).map_err(err)?;
-    // 没关联目标的记录不校验判定规则——没有目标就没有规则可违反。
-    if let Some(id) = goal_id {
-        if !db::goal_has_rule(&conn, id).map_err(err)? {
-            return Err("这个目标还没有判定规则，先补上再记。".into());
+    // 挂到没有手工打卡规则的目标上是允许的——只记下「我本来想推进它」，
+    // 不进那条曲线。所以这里只校验目标存在，不校验规则。
+    for id in &goal_ids {
+        if db::goal_by_id(&conn, *id).map_err(err)?.is_none() {
+            return Err(format!("目标 #{id} 不存在"));
         }
     }
     let now = Local::now();
     let stamp = now.format("%Y-%m-%d %H:%M:%S").to_string();
     db::checkin_add(
         &conn,
-        goal_id,
+        &goal_ids,
         None,
         &now.format("%Y-%m-%d").to_string(),
         &now.format("%H:%M").to_string(),

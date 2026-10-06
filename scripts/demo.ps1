@@ -25,6 +25,10 @@ B goal add "不用 AI 也能做" --why "自己的能力不能完全依赖 AI" --
 
 Write-Output "`n── 写判定规则（什么算推进它）──" 
 B source add "计算机基础" --kind manual_checkin --rationale "读完一章，或做完一章题，算一次"
+# 英语有两条来源，是因为适配器还没接上：**在接上之前只能手工记**。
+# 只写 external_metric 的话，下面那 5 条手工记录按规则不该计分（规则说了算），
+# 卡片上就会出现「有 5 次、但一条记录都不算」——演示数据自己打架。
+B source add "英语" --kind manual_checkin --rationale "复习一轮，算一次（适配器没接上之前先手工记）"
 B source add "英语" --kind external_metric --target "Learn-English 复习记录" --rationale "只算复习记录；在上面写代码的提交不算"
 B source add "不用 AI 也能做" --kind git_commits --target "标为无 AI 的仓库" --rationale "从某个提交起禁用 AI，那个点之后的提交才算"
 

@@ -66,12 +66,22 @@ enum Cmd {
     Tick,
 
     /// 渲染本地 HTML
+    ///
+    /// 默认出的是「导出版」：没有窗口外壳（标题栏、底部输入框），带日期。
+    /// 下面两个开关是为了**在浏览器里核对窗口里真实的排版**——
+    /// 无头浏览器可以按任意宽度截屏，比在真窗口上量快得多，也不抢焦点。
     Render {
         #[arg(short, long, default_value = "data/view.html")]
         out: PathBuf,
         /// 渲染后自动用默认浏览器打开
         #[arg(long)]
         open: bool,
+        /// 只渲染这一个目标的详情页（目标的 id）
+        #[arg(long)]
+        goal: Option<i64>,
+        /// 带上窗口外壳：自绘顶栏 + 底部输入框，和窗口里看到的一致
+        #[arg(long)]
+        window: bool,
     },
 
     /// 各目标的当前状态（终端速览）
@@ -311,16 +321,8 @@ fn main() -> Result<()> {
                 }
             });
             let note = note.unwrap_or_default();
-            let id = db::checkin_add(
-                &conn,
-                g.as_ref().map(|g| g.id),
-                None,
-                &day,
-                &time,
-                value,
-                &note,
-                &now_s,
-            )?;
+            let ids: Vec<i64> = g.iter().map(|g| g.id).collect();
+            let id = db::checkin_add(&conn, &ids, None, &day, &time, value, &note, &now_s)?;
             match &g {
                 Some(g) => {
                     let cur = db::cumulative_now(&conn, g.id)?;
@@ -347,10 +349,15 @@ fn main() -> Result<()> {
             println!("快照补齐完成，新写入 {n} 条（已存在的日期未改写）");
         }
 
-        Cmd::Render { out, open } => {
+        Cmd::Render { out, open, goal, window } => {
             // 渲染前顺手补快照，保证曲线是最新的。幂等。
             metrics::roll(&conn, today)?;
-            let html = render::render(&conn, today, render::Chrome::File, None)?;
+            let chrome = if window {
+                render::Chrome::Window
+            } else {
+                render::Chrome::File
+            };
+            let html = render::render(&conn, today, chrome, goal)?;
             if let Some(dir) = out.parent() {
                 std::fs::create_dir_all(dir).ok();
             }

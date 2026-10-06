@@ -89,18 +89,29 @@
   function rowHtml(r) {
     if (r.k === 'd') {
       // 具体年月日在 title 上，悬停才出现。看得见的是「哪天」+「周几」。
-      return '<div class="day" title="' + esc(r.title || '') + '"><div class="dlabel">' +
+      // title 挂在 .dlabel 上而不是整行 .day 上：那一行是通栏的，
+      // 挂在行上会让「鼠标随便停在右边空白」也弹日期。
+      return '<div class="day"><div class="dlabel" title="' + esc(r.title || '') + '">' +
         '<span class="dl">' + esc(r.label) + '</span>' +
         (r.wd ? '<span class="dw">' + esc(r.wd) + '</span>' : '') + '</div></div>';
     }
-    // 没关联目标的记录：标签安静一点。它确实发生过，只是还没归到哪条线上。
-    return '<div class="entry' + (r.linked ? '' : ' unlinked') + '">' +
+    // 一条记录可以挂多个目标。挂着的都列出来；`counts` 为假表示这条规则
+    // 不接受手工记录——标签画成虚线并说明，免得以为它推动了那条线。
+    var tags = (r.goals || []).map(function (g) {
+      var no = g.counts ? '' : ' noscore';
+      var tip = g.counts ? '' : '这条规则不接受手工记录，记了也不动这条线';
+      return '<span class="chip ' + esc(g.color) + no + '"' +
+        (tip ? ' title="' + esc(tip) + '"' : '') + '>' + esc(g.title) + '</span>';
+    }).join('');
+    var none = tags ? '' : ' unlinked';
+    if (!tags) tags = '<span class="chip none">没关联目标</span>';
+    return '<div class="entry' + none + '">' +
       '<div class="time">' + esc(r.time) + '</div>' +
-      '<div class="rail"><span class="dot ' + esc(r.color) + '"></span></div>' +
+      '<div class="rail"><span class="dot ' + esc((r.goals[0] || {}).color || 'none') +
+      '"></span></div>' +
       '<div class="body"><div class="act" title="' + esc(r.text) + '">' + esc(r.text) + '</div>' +
       '<div class="sub">' + esc(r.sub) + '</div></div>' +
-      '<div class="tags"><span class="chip ' + esc(r.color) + '">' + esc(r.goal) +
-      '</span></div></div>';
+      '<div class="tags">' + tags + '</div></div>';
   }
 
   function build() {
@@ -182,13 +193,12 @@
     var form = $('composer');
     if (!form) return; // 导出的单文件没有输入框
     var input = $('composer-input');
-    var goalField = $('composer-goal');
-    var gbtn = $('gbtn');
-    var glabel = $('gbtn-label');
+    var field = $('composer-goals');
+    var chips = $('gchips');
+    var more = $('gmore');
     var gmenu = $('gmenu');
 
-    // 默认两行、随内容长高。多行是要能打的——一句话写不下的时候，
-    // 硬塞进一行会让人写得更短，而备注是这条流水上唯一有信息量的东西。
+    // 默认两行、随内容长高。
     var MAX_H = 160;
     function grow() {
       input.style.height = 'auto';
@@ -198,35 +208,74 @@
     input.dataset.ph = input.placeholder; // 出错提示要能还原回去
     grow();
 
-    // ---- 记到哪个目标 ----
+    // ---- 这条记录推进了哪些目标 ----
     //
-    // **默认不关联。** 记下来是第一步，归到哪个目标是第二步；逼着先选目标，
-    // 等于在「我还不知道这算推进什么」的时候替人做决定。
-    // 选没选只改一个隐藏域，提交语义一样：空值就是不关联。
-    function closeMenu() { if (gmenu) gmenu.hidden = true; }
+    // 全部目标都列出来，点一下选中、再点一下取消，可以多选，也可以一个都不选。
+    // **默认一个都不选**：记下来是第一步，归到哪个目标是第二步；
+    // 逼着先选目标，等于在「我还不知道这算推进什么」的时候替人做决定。
+    //
+    // 状态只有 `chosen` 一份，标签和菜单都从它画出来——两处各存一份迟早对不上。
+    var chosen = {};
+    function ids() { return Object.keys(chosen); }
 
-    if (gbtn && gmenu) {
-      gbtn.addEventListener('click', function () { gmenu.hidden = !gmenu.hidden; });
-      gmenu.addEventListener('click', function (ev) {
-        var b = ev.target.closest('.gopt');
-        if (!b) return;
-        Array.prototype.forEach.call(gmenu.children, function (c) { c.classList.remove('on'); });
-        b.classList.add('on');
-        goalField.value = b.dataset.goal || '';
-        if (glabel) glabel.textContent = b.dataset.label || '';
-        var dot = gbtn.querySelector('.dot');
-        if (dot) dot.className = 'dot ' + (b.dataset.color || 'none');
-        closeMenu();
-        input.focus();
+    function sync() {
+      if (field) field.value = ids().join(',');
+      Array.prototype.forEach.call(document.querySelectorAll('.gchip'), function (b) {
+        b.classList.toggle('on', !!chosen[b.dataset.goal]);
       });
-      // 点别处、按 Esc 都收起来：一个不会消失的浮层会挡住它下面的东西。
-      document.addEventListener('click', function (ev) {
-        if (!gbtn.contains(ev.target) && !gmenu.contains(ev.target)) closeMenu();
+      Array.prototype.forEach.call(document.querySelectorAll('.gopt'), function (b) {
+        b.classList.toggle('on', !!chosen[b.dataset.goal]);
       });
-      document.addEventListener('keydown', function (ev) {
-        if (ev.key === 'Escape') closeMenu();
+      if (more) more.classList.toggle('on', ids().length > 0);
+    }
+
+    // 一行放不下就整排收起来，只留一个「…」。用真实的布局宽度判断，
+    // 不靠猜字符数——目标名有长有短，猜不准。
+    function fitChips() {
+      if (!chips || !more) return;
+      chips.hidden = false;
+      more.hidden = true;
+      if (chips.scrollWidth > chips.clientWidth + 1) {
+        chips.hidden = true;
+        more.hidden = false;
+      }
+    }
+
+    function toggle(id) {
+      if (!id) return;
+      if (chosen[id]) delete chosen[id]; else chosen[id] = true;
+      sync();
+      fitChips();
+      // 点完标签把光标还给输入框：选目标是记录的一个动作，
+      // 不该让「选完还要再点一下输入框才能打字」变成必须知道的事。
+      input.focus();
+    }
+
+    if (chips) {
+      chips.addEventListener('click', function (ev) {
+        var b = ev.target.closest('.gchip');
+        if (b) toggle(b.dataset.goal);
       });
     }
+    if (gmenu) {
+      gmenu.addEventListener('click', function (ev) {
+        var b = ev.target.closest('.gopt');
+        if (b) toggle(b.dataset.goal);
+      });
+    }
+    if (more && gmenu) {
+      more.addEventListener('click', function () { gmenu.hidden = !gmenu.hidden; });
+      // 点别处、按 Esc 都收起来：一个不会消失的浮层会挡住它下面的东西。
+      document.addEventListener('click', function (ev) {
+        if (!more.contains(ev.target) && !gmenu.contains(ev.target)) gmenu.hidden = true;
+      });
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape') gmenu.hidden = true;
+      });
+    }
+    window.addEventListener('resize', fitChips);
+    sync();
+    fitChips();
 
     function fail(e) {
       form.classList.remove('busy');
@@ -246,9 +295,8 @@
       if (!text || form.classList.contains('busy')) return;
       form.classList.add('busy');
       input.disabled = true;
-      // 空字符串 -> null：Tauri 那边收到 None，这条记录不进任何曲线。
-      var gid = goalField.value ? Number(goalField.value) : null;
-      invoke('add_checkin', { goalId: gid, note: text })
+      // 一个都没选就是 []，Tauri 那边收到空数组 —— 这条记录不关联任何目标。
+      invoke('add_checkin', { goalIds: ids().map(Number), note: text })
         .then(function () {
           // 提交后整页重来：Rust 会重算今天的快照，流水重新落到底、输入框重新聚焦。
           // 不做局部插入——那样「卡片上的数字」和「曲线末端」就要在两边各算一次。
@@ -554,6 +602,43 @@
     });
   }
 
+  // ---------------------------------------------------------------- 模态确认
+
+  /* 危险动作的确认框。返回一个 Promise<boolean>。
+     不用 window.confirm：原生弹窗在这扇无边框窗口里很突兀，
+     而且它挡住 JS 线程，连我们自己的日志都送不出去。 */
+  function confirmModal(opt) {
+    return new Promise(function (resolve) {
+      var modal = $('modal');
+      if (!modal) { resolve(window.confirm(opt.title)); return; }
+      $('m-title').textContent = opt.title || '';
+      $('m-text').textContent = opt.text || '';
+      var what = $('m-what');
+      what.textContent = opt.what || '';
+      what.hidden = !opt.what;
+      var ok = $('m-ok');
+      ok.textContent = opt.ok || '确定';
+      ok.classList.toggle('danger', opt.danger !== false);
+
+      function close(v) {
+        modal.hidden = true;
+        ok.onclick = null;
+        $('m-cancel').onclick = null;
+        modal.onclick = null;
+        document.removeEventListener('keydown', onKey);
+        resolve(v);
+      }
+      function onKey(ev) { if (ev.key === 'Escape') close(false); }
+      ok.onclick = function () { close(true); };
+      $('m-cancel').onclick = function () { close(false); };
+      // 点遮罩关掉，点盒子本身不关。
+      modal.onclick = function (ev) { if (ev.target === modal) close(false); };
+      document.addEventListener('keydown', onKey);
+      modal.hidden = false;
+      $('m-cancel').focus();
+    });
+  }
+
   // ---------------------------------------------------------------- 目标详情
 
   /* 点卡片进来的那一屏。Rust 已经把所有状态（读的、编辑的、归档的、加规则的）
@@ -605,29 +690,37 @@
     var del = $('ddel');
     if (del && !del.disabled) {
       del.onclick = function () {
-        // 不用 window.confirm：原生弹窗在这扇无边框窗口里很突兀，而且它挡住 JS 线程。
-        // 就地变成两步确认——顺带让人看清自己正在确认什么。
-        if (del.dataset.armed !== '1') {
-          del.dataset.armed = '1';
-          del.textContent = '真的删？再点一下';
-          del.classList.add('armed');
-          setTimeout(function () {
-            if (del.dataset.armed === '1') {
-              del.dataset.armed = '';
-              del.textContent = '删除';
-              del.classList.remove('armed');
-            }
-          }, 4000);
-          return;
-        }
-        invoke('delete_goal', { id: id }).then(back).catch(fail);
+        confirmModal({
+          title: '删掉这个目标？',
+          text: '它还没有任何记录，删了就没了。如果只是暂时不想做，走归档——' +
+            '曲线和记录都会留着，还有你写下的那句理由。',
+          what: $('.dtitle') ? $('.dtitle').textContent.trim() : '',
+          ok: '删掉',
+        }).then(function (yes) {
+          if (!yes) return;
+          invoke('delete_goal', { id: id }).then(back).catch(fail);
+        });
       };
     }
 
     // ---- 规则的增删 ----
-    Array.prototype.forEach.call(document.querySelectorAll('.rule .x'), function (b) {
+    Array.prototype.forEach.call(document.querySelectorAll('.rule'), function (row) {
+      var b = row.querySelector('.x');
+      if (!b) return;
       b.onclick = function () {
-        invoke('delete_source', { id: Number(b.dataset.src) }).then(ok).catch(fail);
+        var kind = row.querySelector('.rkind');
+        var why = row.querySelector('.rwhy');
+        confirmModal({
+          title: '删掉这条判定规则？',
+          text: '删掉之后，这类活动就不再推进这个目标了。' +
+            '如果这是最后一条规则，它的曲线会停在这里不再动。',
+          what: [kind && kind.textContent.trim(), why && why.textContent.trim()]
+            .filter(Boolean).join(' · '),
+          ok: '删掉规则',
+        }).then(function (yes) {
+          if (!yes) return;
+          invoke('delete_source', { id: Number(b.dataset.src) }).then(ok).catch(fail);
+        });
       };
     });
 

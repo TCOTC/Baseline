@@ -33,56 +33,73 @@ const VIEW_JS: &str = include_str!("../assets/view.js");
 
 /// 底部输入框。
 ///
-/// 结构是**上下两层**：上面写文本，下面左边是「记到哪个目标」的按钮、
-/// 右边是「记下」。目标按钮在一行里，是因为关联目标是这条记录的**属性**，
-/// 不是记录本身；把它摆在输入区上方会让人以为要先选目标才能打字。
+/// 结构是**上下两层**：上面写文本，下面一行左边是「这条记录推进了哪些目标」、
+/// 右边「记下」。目标做成**可多选的标签**摆在这一行里，点一下选中、再点一下取消。
 ///
-/// **默认不关联任何目标。** 记下来是第一步，归到哪个目标是第二步；
-/// 逼着先选目标，等于在「我还不知道这算推进什么」的时候替人做决定。
+/// **默认一个都不选。** 记下来是第一步，归到哪个目标是第二步；逼着先选目标，
+/// 等于在「我还不知道这算推进什么」的时候替人做决定。
+///
+/// 列表里是**全部目标**，不只是能手工打卡的那些。规则里没有手工打卡的目标
+/// 会带一句说明——挂上去是记下「我本来想推进它」，但不进那条曲线。
+/// 标签在一行里放不下时收起来，只留一个「…」，点开是同一个菜单。
 fn composer_html(conn: &Connection, goals: &[Goal]) -> Result<String> {
-    let mut manual: Vec<&Goal> = Vec::new();
-    for g in goals {
-        if db::sources_of(conn, g.id)?
-            .iter()
-            .any(|s| s.kind == crate::model::SourceKind::ManualCheckin)
-        {
-            manual.push(g);
-        }
-    }
-    if manual.is_empty() {
-        // 没有能打卡的目标，就不摆一个按下去没反应的输入框。
+    if goals.is_empty() {
+        // 一个目标都没有，就不摆一个按下去没反应的输入框。
         return Ok(String::new());
     }
+    let manual = manual_goals(conn, goals)?;
 
-    let mut menu = String::from(
-        r#"<button type="button" class="gopt none on" data-goal="" data-color="none" data-label="不关联目标">不关联目标</button>"#,
-    );
-    for g in &manual {
-        menu.push_str(&format!(
-            r#"<button type="button" class="gopt {color}" data-goal="{id}" data-color="{color}" data-label="{title}"><i></i>{title}</button>"#,
+    let mut chips = String::new();
+    let mut menu = String::new();
+    for g in goals {
+        let counts = manual.contains(&g.id);
+        let tip = if counts {
+            String::new()
+        } else {
+            "（规则里没有手工打卡，记了也不动这条线）".to_string()
+        };
+        chips.push_str(&format!(
+            r#"<button type="button" class="gchip {color}{on}" data-goal="{id}" title="{title}{tip}"><i></i>{title}</button>"#,
             color = esc(&g.color),
+            on = if counts { "" } else { " noscore" },
             id = g.id,
             title = esc(&g.title),
+            tip = esc(&tip),
+        ));
+        menu.push_str(&format!(
+            r#"<button type="button" class="gopt {color}{on}" data-goal="{id}"><i></i><span class="gn">{title}</span>{note}</button>"#,
+            color = esc(&g.color),
+            on = if counts { "" } else { " noscore" },
+            id = g.id,
+            title = esc(&g.title),
+            note = if counts {
+                String::new()
+            } else {
+                r#"<em>规则里没有手工打卡，记了也不动这条线</em>"#.to_string()
+            },
         ));
     }
 
     Ok(format!(
         r#"
       <form class="composer" id="composer" autocomplete="off">
-        <input type="hidden" id="composer-goal" value="">
-        <div class="gmenu" id="gmenu" hidden>{menu}</div>
+        <input type="hidden" id="composer-goals" value="">
+        <div class="gmenu" id="gmenu" hidden>
+          <div class="gmenu-h">这条记录推进了哪些目标？<span>可以多选，也可以一个都不选</span></div>
+          {menu}
+        </div>
         <div class="box">
           <textarea id="composer-input" rows="2" maxlength="500"
                     placeholder="刚做了什么？" aria-label="记一条"></textarea>
           <div class="crow">
-            <button type="button" class="gbtn" id="gbtn" aria-haspopup="true">
-              <i class="dot"></i><span id="gbtn-label">不关联目标</span>
-            </button>
+            <div class="gchips" id="gchips">{chips}</div>
+            <button type="button" class="gmore" id="gmore" hidden>…</button>
             <button type="submit" class="send" tabindex="-1">记下</button>
           </div>
         </div>
       </form>"#,
         menu = menu,
+        chips = chips,
     ))
 }
 
@@ -203,25 +220,18 @@ fn curve_svg(s: &GoalSeries) -> String {
     if !s.has_data {
         return r#"<div class="cempty">这条线还没有任何记录</div>"#.to_string();
     }
-    let (d, pts) = step_path(&s.values, W, H, PAD);
+    let (d, _pts) = step_path(&s.values, W, H, PAD);
     let base_y = H - PAD;
 
-    // 破零点：这条线第一次从 0 变成非 0 的位置。全产品唯一允许的强调。
+    // **曲线上一个圆点都没有。**
     //
-    // **破零发生在第一个点时不画。** 那时候线头本来就是抬起来的，
-    // 没有「之前是 0」可以对照，光晕就只剩一个孤零零的圆点挂在线的开头，
-    // 看着像脏东西。它有意义的前提是「这条线曾经平躺过」。
-    let mut extra = String::new();
-    if let Some(i) = s.values.iter().position(|v| *v > 0.0) {
-        if i > 0 {
-            if let Some(&(x, y)) = pts.get(i) {
-                extra.push_str(&format!(
-                    r#"<circle class="cv-halo" cx="{x:.2}" cy="{y:.2}" r="6"/><circle class="cv-mark" cx="{x:.2}" cy="{y:.2}" r="3"/>"#
-                ));
-            }
-        }
-    }
-    let (lx, ly) = pts.last().copied().unwrap_or((W, base_y));
+    // 原来有两个：破零点（这条线第一次从 0 变正的位置）那个带光晕的点，
+    // 和线尾那个「现在到哪了」的点。第一个删掉是因为线头那一段本来就是台阶，
+    // 再点一个点上去读起来像一个没来由的句号；第二个我一度以为它是信息，
+    // 留着了——**它不是**。阶梯线的末端本来就在那儿，点一个点只是把
+    // 「最后一个数据点」画了两遍。
+    //
+    // 强调留给曲线本身的形状：平了多少天、哪天开始抬，线自己说得清。
 
     // 悬停时给出窗口范围，省得去数格子
     let range = match (s.days.first(), s.days.last()) {
@@ -235,8 +245,7 @@ fn curve_svg(s: &GoalSeries) -> String {
         + &format!(
             r#"<line class="cv-base" x1="0" y1="{base_y:.2}" x2="{W}" y2="{base_y:.2}"/>"#
         )
-        + &format!(r#"<path class="cv-line" d="{d}"/>{extra}"#)
-        + &format!(r#"<circle class="cv-dot" cx="{lx:.2}" cy="{ly:.2}" r="2.4"/></svg>"#)
+        + &format!(r#"<path class="cv-line" d="{d}"/></svg>"#)
 }
 
 fn strip_html(on: &[bool]) -> String {
@@ -349,16 +358,39 @@ fn day_label(day: &NaiveDate, today: NaiveDate) -> (String, Option<String>) {
 fn timeline_json(
     conn: &Connection,
     goals: &HashMap<i64, Goal>,
+    manual: &std::collections::HashSet<i64>,
     today: NaiveDate,
 ) -> Result<String> {
-    Ok(rows_json(&db::checkins_all(conn)?, goals, today))
+    Ok(rows_json(&db::checkins_all(conn)?, goals, manual, today))
+}
+
+/// 哪些目标的规则接受手工记录。
+///
+/// **只有这些目标的手工记录才算数。** 挂到别的目标上是允许的（记下「我本来想推进它」），
+/// 但不进那条曲线——设计文档 §5.3 的例子 C：在 Learn-English 上写代码不能推动「英语」。
+fn manual_goals(conn: &Connection, goals: &[Goal]) -> Result<std::collections::HashSet<i64>> {
+    let mut s = std::collections::HashSet::new();
+    for g in goals {
+        if db::sources_of(conn, g.id)?
+            .iter()
+            .any(|x| x.kind == crate::model::SourceKind::ManualCheckin)
+        {
+            s.insert(g.id);
+        }
+    }
+    Ok(s)
 }
 
 /// 把一串记录拼成流水行。
 ///
 /// 主视图（全部记录）和详情页（某个目标的记录）共用这一个函数，
 /// 所以两处的行结构不可能走样。
-fn rows_json(checkins: &[crate::model::Checkin], goals: &HashMap<i64, Goal>, today: NaiveDate) -> String {
+fn rows_json(
+    checkins: &[crate::model::Checkin],
+    goals: &HashMap<i64, Goal>,
+    manual: &std::collections::HashSet<i64>,
+    today: NaiveDate,
+) -> String {
     let mut rows: Vec<serde_json::Value> = Vec::new();
     let mut last_day = String::new();
 
@@ -378,11 +410,20 @@ fn rows_json(checkins: &[crate::model::Checkin], goals: &HashMap<i64, Goal>, tod
             }
             last_day = c.day.clone();
         }
-        // goal_id 可以是 None：记了一条但没关联目标。
-        let (color, title, linked) = match c.goal_id.and_then(|id| goals.get(&id)) {
-            Some(g) => (g.color.clone(), g.title.clone(), true),
-            None => ("none".to_string(), "没关联目标".to_string(), false),
-        };
+        // 一条记录可以挂多个目标。挂着的都列出来；
+        // `counts` 为假表示「这条规则不接受手工记录」，标签会画得安静一点。
+        let chips: Vec<serde_json::Value> = c
+            .goal_ids
+            .iter()
+            .map(|id| match goals.get(id) {
+                Some(g) => json!({
+                    "title": g.title,
+                    "color": g.color,
+                    "counts": manual.contains(id),
+                }),
+                None => json!({ "title": "（已删除）", "color": "none", "counts": false }),
+            })
+            .collect();
         let text = if c.note.trim().is_empty() {
             "手工打卡".to_string()
         } else {
@@ -390,7 +431,7 @@ fn rows_json(checkins: &[crate::model::Checkin], goals: &HashMap<i64, Goal>, tod
         };
         rows.push(json!({
             "k": "e", "time": c.time, "text": text, "sub": "手工打卡",
-            "goal": title, "color": color, "linked": linked,
+            "goals": chips,
         }));
     }
 
@@ -445,7 +486,7 @@ fn detail_body(conn: &Connection, today: NaiveDate, g: &Goal) -> Result<String> 
           {target}
           {why}
         </div>
-        <button type="button" class="x" data-src="{id}" title="删掉这条规则">删</button>
+        <button type="button" class="x" data-src="{id}" title="删掉这条规则">删除规则</button>
       </div>"#,
             kind = src.kind.label(),
             unimpl = if src.kind.implemented() { "" } else { "（未接入）" },
@@ -487,72 +528,83 @@ fn detail_body(conn: &Connection, today: NaiveDate, g: &Goal) -> Result<String> 
             .to_string()
     };
 
+    // 布局 C：整宽头部（曲线是主角）+ 下面「规则 | 记录」两栏。
+    // 曲线从卡片上的 44px 放到 116px、当前值放到 60px：窗口只放一个目标，
+    // 没有理由还挤在卡片那个尺寸里。
     Ok(format!(
         r#"
-<div class="detail" data-goal="{id}"><div class="dinner">
-  <a class="back" href="/">← 返回主页</a>
-
-  <div id="dview">
-    <div class="dhead {color}">
-      <span class="dtitle"><i></i>{title}</span>
-      <span class="{vclass}">{val}</span>
-    </div>
-    {why}
-  </div>
-
-  <div id="deditform" hidden>
-    <div class="field"><label>名字</label><input id="etitle" maxlength="40" value="{title_attr}"></div>
-    <div class="field"><label>为什么想做</label><textarea id="ewhy" rows="3">{why_text}</textarea></div>
-    <div class="dacts" style="border:0;padding:0;margin-top:14px">
-      <button type="button" id="esave">保存</button>
-      <button type="button" id="ecancel">取消</button>
-    </div>
-  </div>
-
-  <div class="dcurve {color}">{curve}</div>
-
-  <section class="dsec">
-    <h3>判定规则<span>什么算推进它</span></h3>
-    <div id="rules">{rules}</div>
-    <button type="button" class="back" id="addrbtn">＋ 加一条规则</button>
-    <div id="addrform" hidden style="margin-top:12px">
-      <div id="addrkinds">{kind_options}</div>
-      <div class="field" id="addrtarget" hidden>
-        <label>具体是哪个？<span id="addrhint"></span></label>
-        <input id="artarget" maxlength="120">
+<div class="detail {color}" data-goal="{id}">
+  <header class="hero">
+    <div class="hero-top">
+      <div>
+        <a class="back" href="/">← 返回主页</a>
+        <div id="dview">
+          <div class="dtitle"><i></i>{title}</div>
+          {why}
+        </div>
+        <div id="deditform" hidden>
+          <div class="field"><label>名字</label><input id="etitle" maxlength="40" value="{title_attr}"></div>
+          <div class="field"><label>为什么想做</label><textarea id="ewhy" rows="3">{why_text}</textarea></div>
+          <div class="dacts" style="border:0;padding:0;margin-top:14px">
+            <button type="button" id="esave">保存</button>
+            <button type="button" id="ecancel">取消</button>
+          </div>
+        </div>
       </div>
-      <div class="field"><label>什么算推进它</label><input id="arrationale" maxlength="120"
-        placeholder="比如：读完一章，或做完一章题，算一次"></div>
-      <div class="dacts" style="border:0;padding:0;margin-top:10px">
-        <button type="button" id="arsave">加上</button>
-        <button type="button" id="arcancel">取消</button>
+      <div class="dcur"><span class="{vclass}">{val}</span><span class="unit">次</span></div>
+    </div>
+    <div class="dcurve">{curve}</div>
+    <div class="cv-foot"><span>{first_day}</span><span>{span_days} 天 · 阶梯线不做插值</span><span>{last_day}</span></div>
+  </header>
+
+  <div class="panes">
+    <div class="pane rules">
+      <section class="dsec">
+        <h3>判定规则<span>什么算推进它</span></h3>
+        <div id="rules">{rules}</div>
+        <button type="button" class="addrule" id="addrbtn">＋ 加一条规则</button>
+        <div id="addrform" hidden style="margin-top:12px">
+          <div id="addrkinds">{kind_options}</div>
+          <div class="field" id="addrtarget" hidden>
+            <label>具体是哪个？<span id="addrhint"></span></label>
+            <input id="artarget" maxlength="120">
+          </div>
+          <div class="field"><label>什么算推进它</label><input id="arrationale" maxlength="120"
+            placeholder="比如：读完一章，或做完一章题，算一次"></div>
+          <div class="dacts" style="border:0;padding:0;margin-top:10px">
+            <button type="button" id="arsave">加上</button>
+            <button type="button" id="arcancel">取消</button>
+          </div>
+        </div>
+      </section>
+
+      <div class="dacts">
+        <button type="button" id="dedit">修改</button>
+        <button type="button" id="darch">归档</button>
+        <button type="button" id="ddel" class="danger"{del_disabled}>删除</button>
+      </div>
+      {del_note}
+      <div id="derr" class="warnline" hidden></div>
+
+      <div id="darchform" hidden style="margin-top:16px">
+        <div class="field"><label>为什么放弃它？</label>
+          <textarea id="areason" rows="2" placeholder="这句话三个月后你会想再看一眼"></textarea></div>
+        <div class="dacts" style="border:0;padding:0;margin-top:10px">
+          <button type="button" id="asave">归档</button>
+          <button type="button" id="acancel">取消</button>
+        </div>
       </div>
     </div>
-  </section>
 
-  <div class="dacts">
-    <button type="button" id="dedit">修改</button>
-    <button type="button" id="darch">归档</button>
-    <button type="button" id="ddel" class="danger"{del_disabled}>删除</button>
-  </div>
-  {del_note}
-  <div id="derr" class="warnline" hidden></div>
-
-  <div id="darchform" hidden style="margin-top:16px">
-    <div class="field"><label>为什么放弃它？</label>
-      <textarea id="areason" rows="2" placeholder="这句话三个月后你会想再看一眼"></textarea></div>
-    <div class="dacts" style="border:0;padding:0;margin-top:10px">
-      <button type="button" id="asave">归档</button>
-      <button type="button" id="acancel">取消</button>
+    <div class="pane recs">
+      <section class="dsec">
+        <h3>记录<span>{n} 条</span></h3>
+        <div class="dlog" id="log"><div class="log-canvas" id="log-canvas"><div class="log-rows" id="log-rows"></div></div></div>
+        <div id="log-empty" class="hint" hidden>这个目标还没有任何记录。回主页，在底部输入框里记一条。</div>
+      </section>
     </div>
   </div>
-
-  <section class="dsec">
-    <h3>记录<span>{n} 条</span></h3>
-    <div class="dlog" id="log"><div class="log-canvas" id="log-canvas"><div class="log-rows" id="log-rows"></div></div></div>
-    <div id="log-empty" class="hint" hidden>这个目标还没有任何记录。回主页，在底部输入框里记一条。</div>
-  </section>
-</div></div>"#,
+</div>"#,
         id = g.id,
         color = esc(&g.color),
         title = esc(&g.title),
@@ -566,6 +618,9 @@ fn detail_body(conn: &Connection, today: NaiveDate, g: &Goal) -> Result<String> 
         title_attr = esc(&g.title),
         why_text = esc(g.why.trim()),
         curve = curve_svg(&s),
+        first_day = s.days.first().cloned().unwrap_or_default(),
+        last_day = s.days.last().cloned().unwrap_or_default(),
+        span_days = s.days.len(),
         rules = rules,
         kind_options = kind_options,
         n = n,
@@ -589,6 +644,7 @@ pub fn render(
 ) -> Result<String> {
     let goals = db::goal_list(conn, false)?;
     let goal_map: HashMap<i64, Goal> = goals.iter().map(|g| (g.id, g.clone())).collect();
+    let manual = manual_goals(conn, &goals)?;
 
     // 目标不存在（链接过期、被删了）就退回主视图，不要给一页空白。
     let focused = match goal {
@@ -613,7 +669,7 @@ pub fn render(
     let (body, log_json) = if let Some(g) = &focused {
         (
             detail_body(conn, today, g)?,
-            rows_json(&db::checkins_of(conn, g.id)?, &goal_map, today),
+            rows_json(&db::checkins_of(conn, g.id)?, &goal_map, &manual, today),
         )
     } else {
         let mut cards = String::new();
@@ -660,7 +716,7 @@ pub fn render(
                 addgoal = addgoal,
                 composer = composer,
             ),
-            timeline_json(conn, &goal_map, today)?,
+            timeline_json(conn, &goal_map, &manual, today)?,
         )
     };
 
@@ -678,6 +734,17 @@ pub fn render(
 <title>{title}</title>
 <style>{css}</style></head><body>{bar}
 <div class="wrap">{body}
+</div>
+<div class="modal" id="modal" hidden>
+  <div class="mbox" role="dialog" aria-modal="true" aria-labelledby="m-title">
+    <h3 id="m-title"></h3>
+    <p id="m-text"></p>
+    <div class="mwhat" id="m-what" hidden></div>
+    <div class="macts">
+      <button type="button" id="m-cancel">取消</button>
+      <button type="button" id="m-ok" class="danger">删掉</button>
+    </div>
+  </div>
 </div>
 <script type="application/json" id="log-data">{log_json}</script>
 <script>{view_js}</script></body></html>"#,
