@@ -79,9 +79,11 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_sources_goal ON sources(goal_id);
 
         -- 一条推进。value 默认 1，即「一次打卡 = 一个单位」。
+        -- goal_id 可空：允许「记了一条，但还没想好它推进哪个目标」。
+        -- 没关联的记录不进任何一条曲线，但它确实发生过。
         CREATE TABLE IF NOT EXISTS checkins (
             id         INTEGER PRIMARY KEY,
-            goal_id    INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            goal_id    INTEGER REFERENCES goals(id) ON DELETE CASCADE,
             source_id  INTEGER REFERENCES sources(id) ON DELETE SET NULL,
             day        TEXT NOT NULL,
             time       TEXT NOT NULL,
@@ -91,7 +93,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_checkins_goal_day ON checkins(goal_id, day);
 
-        -- 每日快照。写入后不再改写。
+        -- 每日快照。**过去的日子写入后不再改写；今天可以重算**（见 snapshot_put_today）。
         CREATE TABLE IF NOT EXISTS snapshots (
             goal_id    INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
             day        TEXT NOT NULL,
@@ -104,6 +106,54 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         "INSERT OR IGNORE INTO meta(k, v) VALUES ('schema_version', ?1)",
         params![SCHEMA_VERSION.to_string()],
     )?;
+    relax_checkin_goal(conn)?;
+    Ok(())
+}
+
+/// 迁移：把 `checkins.goal_id` 的 NOT NULL 去掉（2026-10-06）。
+///
+/// 允许「记了一条，但还没想好它推进哪个目标」。SQLite 改不了列的约束，
+/// 只能重建表再搬数据。
+///
+/// **判断依据是 `pragma_table_info`，不是 `meta.schema_version`。**
+/// 建表全部走 `IF NOT EXISTS`，老库和新库的 schema_version 会是一样的，
+/// 拿它当开关等于没写；而 `notnull` 是事实，重复调用也是安全的（已经是 0 就直接返回）。
+fn relax_checkin_goal(conn: &Connection) -> Result<()> {
+    // `notnull` 是 SQLite 的保留字（它是 `NOT NULL` 语法的一部分），
+    // 当列名用必须加引号，否则报 "near notnull: syntax error"。
+    let notnull: i64 = conn.query_row(
+        r#"SELECT COALESCE(MAX("notnull"), 0) FROM pragma_table_info('checkins') WHERE name = 'goal_id'"#,
+        [],
+        |r| r.get(0),
+    )?;
+    if notnull == 0 {
+        return Ok(()); // 新库，或者已经迁移过
+    }
+    // PRAGMA 在事务里是空操作，所以必须在 BEGIN 之前设。
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    let r = conn.execute_batch(
+        r#"
+        BEGIN;
+        CREATE TABLE checkins_new (
+            id         INTEGER PRIMARY KEY,
+            goal_id    INTEGER REFERENCES goals(id) ON DELETE CASCADE,
+            source_id  INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+            day        TEXT NOT NULL,
+            time       TEXT NOT NULL,
+            value      REAL NOT NULL DEFAULT 1,
+            note       TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        INSERT INTO checkins_new(id, goal_id, source_id, day, time, value, note, created_at)
+            SELECT id, goal_id, source_id, day, time, value, note, created_at FROM checkins;
+        DROP TABLE checkins;
+        ALTER TABLE checkins_new RENAME TO checkins;
+        CREATE INDEX IF NOT EXISTS idx_checkins_goal_day ON checkins(goal_id, day);
+        COMMIT;
+        "#,
+    );
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    r.context("迁移 checkins.goal_id 失败")?;
     Ok(())
 }
 
@@ -192,9 +242,53 @@ pub fn goal_archive(conn: &Connection, id: i64, reason: &str, now: &str) -> Resu
     Ok(())
 }
 
-/// 活跃目标上限。设计文档 §5.4：**3 个**，这是产品和聊天机器人的分界线。
-pub const MAX_ACTIVE_GOALS: usize = 3;
+/// 改目标的名字和动机。
+///
+/// 不在这里校验「名字唯一」之外的东西：怎么描述一个目标是他自己的事。
+pub fn goal_update(conn: &Connection, id: i64, title: &str, why: &str) -> Result<()> {
+    let title = title.trim();
+    if title.is_empty() {
+        bail!("目标得有个名字");
+    }
+    conn.execute(
+        "UPDATE goals SET title=?2, why=?3 WHERE id=?1",
+        params![id, title, why.trim()],
+    )?;
+    Ok(())
+}
 
+/// 删目标。**只有一条记录都没有的目标才允许删。**
+///
+/// 有记录就说明这条线动过——动过的历史不该被一次点击抹掉。
+/// 不要了应该走归档：归档保留曲线，也保留放弃的理由。
+/// 删除留给「建错了」这种情况。
+pub fn goal_delete(conn: &Connection, id: i64) -> Result<()> {
+    let n = checkin_count(conn, id)?;
+    if n > 0 {
+        bail!(
+            "这个目标已经有 {n} 条记录，删不掉。\
+             动过的历史不该被一次点击抹掉——不要了请走归档，它会保留曲线和放弃的理由。"
+        );
+    }
+    conn.execute("DELETE FROM goals WHERE id=?1", params![id])?;
+    Ok(())
+}
+
+pub fn checkin_count(conn: &Connection, goal_id: i64) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM checkins WHERE goal_id=?1",
+        params![goal_id],
+        |r| r.get(0),
+    )?)
+}
+
+pub fn source_delete(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("DELETE FROM sources WHERE id=?1", params![id])?;
+    Ok(())
+}
+
+/// 活跃目标数。**不再拿它卡上限**——上限取消了（2026-10-06，他本人的决定）。
+/// 留着是因为列表和详情页还要用它显示数量。
 pub fn active_goal_count(conn: &Connection) -> Result<usize> {
     let n: i64 = conn.query_row(
         "SELECT COUNT(*) FROM goals WHERE status='active'",
@@ -202,6 +296,19 @@ pub fn active_goal_count(conn: &Connection) -> Result<usize> {
         |r| r.get(0),
     )?;
     Ok(n as usize)
+}
+
+/// 挑一个还没被活跃目标占用的色板。
+///
+/// 放在这里而不是各自复制一份：CLI 和窗口都要建目标，两边的选色逻辑一旦分叉，
+/// 同一个目标在命令行里和窗口里会是两个颜色。
+pub fn next_free_color(conn: &Connection) -> Result<String> {
+    let used: Vec<String> = goal_list(conn, false)?.into_iter().map(|g| g.color).collect();
+    Ok(crate::model::PALETTE
+        .iter()
+        .find(|c| !used.contains(&c.to_string()))
+        .unwrap_or(&crate::model::PALETTE[0])
+        .to_string())
 }
 
 fn row_to_goal(r: &rusqlite::Row) -> rusqlite::Result<Goal> {
@@ -305,7 +412,7 @@ pub fn goals_without_rule(conn: &Connection) -> Result<Vec<Goal>> {
 
 pub fn checkin_add(
     conn: &Connection,
-    goal_id: i64,
+    goal_id: Option<i64>,
     source_id: Option<i64>,
     day: &str,
     time: &str,
@@ -330,13 +437,27 @@ pub fn checkins_of(conn: &Connection, goal_id: i64) -> Result<Vec<Checkin>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// 全部打卡，倒序。给时间线用。
+/// 全部打卡，倒序。
 pub fn checkins_recent(conn: &Connection, limit: usize) -> Result<Vec<Checkin>> {
     let mut stmt = conn.prepare(
         "SELECT id, goal_id, day, time, value, note FROM checkins
          ORDER BY day DESC, time DESC, id DESC LIMIT ?1",
     )?;
     let rows = stmt.query_map(params![limit as i64], row_to_checkin)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// 全部打卡，**正序**。
+///
+/// 时间线是「下新上旧」的一条流水，所以按时间正序取，最新的落在最后一行。
+/// 不设 LIMIT：单用户、一天几条，量级很小；真要大到需要截断，
+/// 该处理的是「怎么让用户看到更早的」，而不是在这里悄悄丢数据。
+pub fn checkins_all(conn: &Connection) -> Result<Vec<Checkin>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, goal_id, day, time, value, note FROM checkins
+         ORDER BY day, time, id",
+    )?;
+    let rows = stmt.query_map([], row_to_checkin)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -390,6 +511,29 @@ pub fn first_checkin_day(conn: &Connection, goal_id: i64) -> Result<Option<Strin
 pub fn snapshot_put(conn: &Connection, goal_id: i64, day: &str, cumulative: f64) -> Result<bool> {
     let n = conn.execute(
         "INSERT OR IGNORE INTO snapshots(goal_id, day, cumulative) VALUES (?1, ?2, ?3)",
+        params![goal_id, day, cumulative],
+    )?;
+    Ok(n > 0)
+}
+
+/// 重算**今天**的快照。
+///
+/// 今天还没过完。用 INSERT OR IGNORE 的话，当天第一次渲染就把今天的值钉死了——
+/// 之后每记一条打卡，卡片上的数字会涨（那是实时累加的），曲线却停在第一次渲染的位置，
+/// 数字和线的末端当场对不上。这不是补记旧账才会遇到的边角，**同一天记第二次就会撞上**。
+///
+/// 所以规则是：**过去的日子冻结，今天可以重算。**
+/// 于是「补记一条三天前的打卡」只会在今天抬一格，不会把已经画出来的曲线往回改。
+pub fn snapshot_put_today(
+    conn: &Connection,
+    goal_id: i64,
+    day: &str,
+    cumulative: f64,
+) -> Result<bool> {
+    let n = conn.execute(
+        "INSERT INTO snapshots(goal_id, day, cumulative) VALUES (?1, ?2, ?3)
+         ON CONFLICT(goal_id, day) DO UPDATE SET cumulative = excluded.cumulative
+         WHERE cumulative <> excluded.cumulative",
         params![goal_id, day, cumulative],
     )?;
     Ok(n > 0)

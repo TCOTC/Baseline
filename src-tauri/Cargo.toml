@@ -14,7 +14,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # 内核。判定规则、累积口径、渲染都在这里，外壳一个字都不重写。
 baseline = { path = ".." }
-# 只取默认特性：本外壳不调用任何 Tauri 插件，tray-icon / image 等都不需要。
-tauri = { version = "2", features = [] }
+# tray-icon：托盘图标。它是「随手记一条」的入口——窗口收起来之后，
+# 没有它就是「关掉即退出」，那条流水的写法也就没有意义了。
+tauri = { version = "2", features = ["tray-icon"] }
 anyhow = "1"
 chrono = "0.4"

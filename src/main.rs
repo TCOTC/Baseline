@@ -11,8 +11,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use chrono::{Local, NaiveDate};
 
+use baseline::model::SourceKind;
 use baseline::{db, metrics, render};
-use baseline::model::{PALETTE, SourceKind};
 
 #[derive(Parser)]
 #[command(
@@ -45,8 +45,9 @@ enum Cmd {
 
     /// 记一条推进
     Checkin {
-        /// 目标名或 id
-        goal: String,
+        /// 目标名或 id。**不写就记一条不关联任何目标的**——它不进任何曲线，
+        /// 但确实发生过。界面上的输入框默认就是这个状态。
+        goal: Option<String>,
         /// 备注，会成为时间线上的标题
         #[arg(long)]
         note: Option<String>,
@@ -141,18 +142,12 @@ fn main() -> Result<()> {
         }
 
         Cmd::Goal(GoalCmd::Add { title, why, color }) => {
-            // 活跃目标上限 3 —— 设计文档 §5.4
-            let active = db::active_goal_count(&conn)?;
-            if active >= db::MAX_ACTIVE_GOALS {
-                anyhow::bail!(
-                    "活跃目标已达上限 {} 个。先归档一个（baseline goal archive <目标> --reason \"...\"）\n\
-                     这个限制不讨好，但它是产品与聊天机器人的分界线。",
-                    db::MAX_ACTIVE_GOALS
-                );
-            }
+            // 上限取消了（2026-10-06，他本人的决定）。原来卡 3 个的理由是
+            // 「产品和聊天机器人的分界线」，但那条线现在靠别的东西守：
+            // 没有判定规则就建不出目标、拒绝是机械的、卡片上永远印着规则本身。
             let color = match color {
                 Some(c) => c,
-                None => next_free_color(&conn)?,
+                None => db::next_free_color(&conn)?,
             };
             let id = db::goal_add(&conn, &title, &why, &color, &now_s)?;
             println!("已创建目标 #{id} 「{title}」（色板 {color}）");
@@ -284,14 +279,21 @@ fn main() -> Result<()> {
             date,
             time,
         } => {
-            let g = db::resolve_goal(&conn, &goal)?;
-            if !db::goal_has_rule(&conn, g.id)? {
-                anyhow::bail!(
-                    "「{}」还没有判定规则。先写清「什么算推进它」——\n  baseline source add \"{}\" --kind manual_checkin --rationale \"...\"",
-                    g.title,
-                    g.title
-                );
-            }
+            // 不写目标 = 记一条不关联的。不校验判定规则——没有目标就没有规则可违反。
+            let g = match &goal {
+                Some(name) => {
+                    let g = db::resolve_goal(&conn, name)?;
+                    if !db::goal_has_rule(&conn, g.id)? {
+                        anyhow::bail!(
+                            "「{}」还没有判定规则。先写清「什么算推进它」——\n  baseline source add \"{}\" --kind manual_checkin --rationale \"...\"",
+                            g.title,
+                            g.title
+                        );
+                    }
+                    Some(g)
+                }
+                None => None,
+            };
             let is_backdated = date.is_some();
             let day = match date {
                 Some(d) => NaiveDate::parse_from_str(&d, "%Y-%m-%d")
@@ -309,16 +311,35 @@ fn main() -> Result<()> {
                 }
             });
             let note = note.unwrap_or_default();
-            let id = db::checkin_add(&conn, g.id, None, &day, &time, value, &note, &now_s)?;
-            let cur = db::cumulative_now(&conn, g.id)?;
-            println!(
-                "已记录 #{} · {} · {} {} → 当前累计 {}",
-                id,
-                g.title,
-                day,
-                time,
-                render::num(cur)
-            );
+            let id = db::checkin_add(
+                &conn,
+                g.as_ref().map(|g| g.id),
+                None,
+                &day,
+                &time,
+                value,
+                &note,
+                &now_s,
+            )?;
+            match &g {
+                Some(g) => {
+                    let cur = db::cumulative_now(&conn, g.id)?;
+                    println!(
+                        "已记录 #{} · {} · {} {} → 当前累计 {}",
+                        id,
+                        g.title,
+                        day,
+                        time,
+                        render::num(cur)
+                    );
+                }
+                // 没关联的记录不进任何曲线，所以这里没有「当前累计」可说。
+                None => println!(
+                    "已记录 #{} · 未关联目标 · {day} {time}\n\
+                     它不会进任何一条曲线。以后想归到某个目标上，得重新记一条。",
+                    id
+                ),
+            }
         }
 
         Cmd::Tick => {
@@ -329,7 +350,7 @@ fn main() -> Result<()> {
         Cmd::Render { out, open } => {
             // 渲染前顺手补快照，保证曲线是最新的。幂等。
             metrics::roll(&conn, today)?;
-            let html = render::render(&conn, today, render::Chrome::File)?;
+            let html = render::render(&conn, today, render::Chrome::File, None)?;
             if let Some(dir) = out.parent() {
                 std::fs::create_dir_all(dir).ok();
             }
@@ -352,6 +373,9 @@ fn main() -> Result<()> {
         }
 
         Cmd::Status => {
+            // 先补快照：卡片和 status 现在都读快照（数字与曲线同源），
+            // 不补的话终端显示的数会比窗口旧一天。
+            metrics::roll(&conn, today)?;
             let goals = db::goal_list(&conn, false)?;
             if goals.is_empty() {
                 println!("（没有目标）");
@@ -379,17 +403,4 @@ fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// 自动挑一个未被活跃目标占用的色板。
-fn next_free_color(conn: &rusqlite::Connection) -> Result<String> {
-    let used: Vec<String> = db::goal_list(conn, false)?
-        .into_iter()
-        .map(|g| g.color)
-        .collect();
-    Ok(PALETTE
-        .iter()
-        .find(|c| !used.contains(&c.to_string()))
-        .unwrap_or(&PALETTE[0])
-        .to_string())
 }

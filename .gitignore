@@ -6,3 +6,5 @@
 *.db-wal
 .idea/
 .vscode/
+# 构建日志：临时产物，误提交过一次
+build.log

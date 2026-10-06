@@ -97,7 +97,12 @@ pub struct Source {
 #[derive(Debug, Clone)]
 pub struct Checkin {
     pub id: i64,
-    pub goal_id: i64,
+    /// **可以是 `None`**：允许「记了一条，但还没想好它推进哪个目标」。
+    ///
+    /// 这不是漏洞，是诚实的中间状态——他原话就是「记录当前做的事情，
+    /// 判断当前做的事情是否能让我更接近达成目标」。判断是第二步，
+    /// 记下来是第一步；没关联的记录不进任何一条曲线，但它确实发生过。
+    pub goal_id: Option<i64>,
     /// YYYY-MM-DD（本地时区）
     pub day: String,
     /// HH:MM
@@ -106,7 +111,11 @@ pub struct Checkin {
     pub note: String,
 }
 
-/// 每日快照。写入后**不再改写**——见 `metrics::roll` 的说明。
+/// 每日快照。
+///
+/// **过去的日子写入后不再改写；今天可以重算**——见 `metrics::roll` 与
+/// `db::snapshot_put_today` 的说明。今天还没过完，把它钉死会让卡片上的数字
+/// 和曲线末端当场对不上。
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     pub goal_id: i64,

@@ -16,12 +16,90 @@ use std::collections::HashMap;
 use anyhow::Result;
 use chrono::{Datelike, NaiveDate, Weekday};
 use rusqlite::Connection;
+use serde_json::json;
 
 use crate::db;
 use crate::metrics::{self, GoalSeries};
-use crate::model::{Checkin, Goal};
+use crate::model::Goal;
 
 const CSS: &str = include_str!("../assets/view.css");
+
+/// 时间线、输入框、新建目标对话的脚本。
+///
+/// 时间线必须是 JS 渲染的：虚拟滚动要知道滚到哪儿了，而 Rust 渲染的是一整串
+/// 静态 HTML，"只画可见的那几十行"这件事插不进去。**行的结构和 class 仍然来自
+/// view.css**，所以样式还是只有一份——搬走的只是行的拼装。
+const VIEW_JS: &str = include_str!("../assets/view.js");
+
+/// 底部输入框。
+///
+/// 结构是**上下两层**：上面写文本，下面左边是「记到哪个目标」的按钮、
+/// 右边是「记下」。目标按钮在一行里，是因为关联目标是这条记录的**属性**，
+/// 不是记录本身；把它摆在输入区上方会让人以为要先选目标才能打字。
+///
+/// **默认不关联任何目标。** 记下来是第一步，归到哪个目标是第二步；
+/// 逼着先选目标，等于在「我还不知道这算推进什么」的时候替人做决定。
+fn composer_html(conn: &Connection, goals: &[Goal]) -> Result<String> {
+    let mut manual: Vec<&Goal> = Vec::new();
+    for g in goals {
+        if db::sources_of(conn, g.id)?
+            .iter()
+            .any(|s| s.kind == crate::model::SourceKind::ManualCheckin)
+        {
+            manual.push(g);
+        }
+    }
+    if manual.is_empty() {
+        // 没有能打卡的目标，就不摆一个按下去没反应的输入框。
+        return Ok(String::new());
+    }
+
+    let mut menu = String::from(
+        r#"<button type="button" class="gopt none on" data-goal="" data-color="none" data-label="不关联目标">不关联目标</button>"#,
+    );
+    for g in &manual {
+        menu.push_str(&format!(
+            r#"<button type="button" class="gopt {color}" data-goal="{id}" data-color="{color}" data-label="{title}"><i></i>{title}</button>"#,
+            color = esc(&g.color),
+            id = g.id,
+            title = esc(&g.title),
+        ));
+    }
+
+    Ok(format!(
+        r#"
+      <form class="composer" id="composer" autocomplete="off">
+        <input type="hidden" id="composer-goal" value="">
+        <div class="gmenu" id="gmenu" hidden>{menu}</div>
+        <div class="box">
+          <textarea id="composer-input" rows="2" maxlength="500"
+                    placeholder="刚做了什么？" aria-label="记一条"></textarea>
+          <div class="crow">
+            <button type="button" class="gbtn" id="gbtn" aria-haspopup="true">
+              <i class="dot"></i><span id="gbtn-label">不关联目标</span>
+            </button>
+            <button type="submit" class="send" tabindex="-1">记下</button>
+          </div>
+        </div>
+      </form>"#,
+        menu = menu,
+    ))
+}
+
+/// 左栏左下角的加号。
+///
+/// 不再有上限（2026-10-06 取消）。原来卡 3 个的理由是「这是产品与聊天机器人的分界线」，
+/// 但那条线现在由别的东西守：建目标必须一并写下判定规则，写不出就不让建；
+/// 而每张卡片底部永远印着那条规则本身。数量的多少不是那条分界线。
+fn addgoal_html() -> String {
+    r#"
+      <button type="button" class="addgoal" id="addgoal">
+        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>新建目标</span>
+      </button>"#
+        .to_string()
+}
+
 
 /// 页面外壳。
 ///
@@ -58,53 +136,6 @@ fn title_bar_html() -> &'static str {
   </div>"#
 }
 
-/// 顶栏按钮的接线。
-///
-/// `__TAURI__` 不存在时整段直接退出——这一页在浏览器里打开也不会报错，
-/// 只是按钮没反应（而那种情况下本来就不该有顶栏）。
-///
-/// 所有失败都会 POST 到 `/__jslog`，由外壳写进 `desktop.log`。
-/// 窗口没有系统边框也就没有开发工具，界面上的异常不主动送出来就等于不存在。
-const TITLE_BAR_JS: &str = r#"
-<script>
-(function () {
-  function report(what, e) {
-    var msg = what + ': ' + ((e && (e.stack || e.message)) || e);
-    try { fetch('/__jslog', { method: 'POST', body: msg, keepalive: true }); } catch (_) {}
-  }
-  window.addEventListener('error', function (e) { report('window.onerror', e.message); });
-  window.addEventListener('unhandledrejection', function (e) { report('unhandled', e.reason); });
-  // 每次加载报一行。用来区分「窗口起来了」和「窗口起来了但页面是空的」——
-  // 这两种情况从外面看一模一样，处置却完全相反。
-  report('page', document.querySelectorAll('.card').length + ' cards, '
-    + document.querySelectorAll('.entry').length + ' entries');
-
-  var T = window.__TAURI__;
-  if (!T || !T.window) { report('no __TAURI__', 'withGlobalTauri 没生效？'); return; }
-  var w = T.window.getCurrentWindow();
-  var max = document.getElementById('w-max');
-
-  // 最大化之后那个方框必须变成「还原」，否则它就在骗人。
-  function paint(on) { max.textContent = on ? '\uE923' : '\uE922'; }
-  function sync() { w.isMaximized().then(paint).catch(function (e) { report('isMaximized', e); }); }
-
-  document.getElementById('w-min').onclick = function () {
-    w.minimize().catch(function (e) { report('minimize', e); });
-  };
-  // 用 maximize/unmaximize 而不是 toggleMaximize：图标要跟着状态走，
-  // 而状态本来就得查一次，顺带把「查」和「改」绑在同一次判断里。
-  max.onclick = function () {
-    w.isMaximized().then(function (on) {
-      return on ? w.unmaximize() : w.maximize();
-    }).catch(function (e) { report('maximize', e); });
-  };
-  document.getElementById('w-close').onclick = function () {
-    w.close().catch(function (e) { report('close', e); });
-  };
-  w.onResized(sync);
-  sync();
-})();
-</script>"#;
 pub fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -112,15 +143,19 @@ pub fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// 「周一」…「周日」。
+///
+/// 用「周X」不用「星期X」：流水上方那一行是**扫读用的坐标**，不是一句话。
+/// 三个字里只有后一个字有信息量。
 fn weekday_cn(d: NaiveDate) -> &'static str {
     match d.weekday() {
-        Weekday::Mon => "星期一",
-        Weekday::Tue => "星期二",
-        Weekday::Wed => "星期三",
-        Weekday::Thu => "星期四",
-        Weekday::Fri => "星期五",
-        Weekday::Sat => "星期六",
-        Weekday::Sun => "星期日",
+        Weekday::Mon => "周一",
+        Weekday::Tue => "周二",
+        Weekday::Wed => "周三",
+        Weekday::Thu => "周四",
+        Weekday::Fri => "周五",
+        Weekday::Sat => "周六",
+        Weekday::Sun => "周日",
     }
 }
 
@@ -172,12 +207,18 @@ fn curve_svg(s: &GoalSeries) -> String {
     let base_y = H - PAD;
 
     // 破零点：这条线第一次从 0 变成非 0 的位置。全产品唯一允许的强调。
+    //
+    // **破零发生在第一个点时不画。** 那时候线头本来就是抬起来的，
+    // 没有「之前是 0」可以对照，光晕就只剩一个孤零零的圆点挂在线的开头，
+    // 看着像脏东西。它有意义的前提是「这条线曾经平躺过」。
     let mut extra = String::new();
     if let Some(i) = s.values.iter().position(|v| *v > 0.0) {
-        if let Some(&(x, y)) = pts.get(i) {
-            extra.push_str(&format!(
-                r#"<circle class="cv-halo" cx="{x:.2}" cy="{y:.2}" r="6"/><circle class="cv-mark" cx="{x:.2}" cy="{y:.2}" r="3"/>"#
-            ));
+        if i > 0 {
+            if let Some(&(x, y)) = pts.get(i) {
+                extra.push_str(&format!(
+                    r#"<circle class="cv-halo" cx="{x:.2}" cy="{y:.2}" r="6"/><circle class="cv-mark" cx="{x:.2}" cy="{y:.2}" r="3"/>"#
+                ));
+            }
         }
     }
     let (lx, ly) = pts.last().copied().unwrap_or((W, base_y));
@@ -211,7 +252,12 @@ fn strip_html(on: &[bool]) -> String {
     s
 }
 
-fn card_html(g: &Goal, s: &GoalSeries, rule_line: &str) -> String {
+/// 一张目标卡。`clickable` 时整张卡是一个链接，点开进这个目标的详情页。
+///
+/// 用链接而不是 JS 点击：详情页是**服务端路由**（`?goal=N`），
+/// 于是「窗口只显示这一个目标」这件事仍然由 Rust 一次渲染完成，
+/// 不需要在 JS 里再维护一套详情页的模板。
+fn card_html(g: &Goal, s: &GoalSeries, rule_line: &str, clickable: bool) -> String {
     let has = s.has_data;
     let (vclass, dclass) = if has { ("v", "cd") } else { ("v none", "cd zero") };
     let delta = if has {
@@ -226,16 +272,23 @@ fn card_html(g: &Goal, s: &GoalSeries, rule_line: &str) -> String {
     } else {
         "还没有记录".to_string()
     };
+    let (open, close) = if clickable {
+        (format!(r#"<a class="card {color}" href="?goal={id}">"#, color = esc(&g.color), id = g.id),
+         "</a>".to_string())
+    } else {
+        (format!(r#"<div class="card {color}">"#, color = esc(&g.color)), "</div>".to_string())
+    };
     format!(
         r#"
-    <div class="card {color}">
+    {open}
       <div class="chead"><span class="ct"><i></i>{title}</span><span class="{dclass}">{delta}</span></div>
       <div class="vrow"><span class="{vclass}">{cur}</span><span class="u">次</span></div>
       {curve}
       {strip}
       <div class="gmeta">{rule}</div>
-    </div>"#,
-        color = esc(&g.color),
+    {close}"#,
+        open = open,
+        close = close,
         title = esc(&g.title),
         dclass = dclass,
         delta = delta,
@@ -289,125 +342,333 @@ fn day_label(day: &NaiveDate, today: NaiveDate) -> (String, Option<String>) {
     }
 }
 
-fn timeline_html(conn: &Connection, goals: &HashMap<i64, Goal>, today: NaiveDate) -> Result<String> {
-    let checkins = db::checkins_recent(conn, 300)?;
-    if checkins.is_empty() {
-        return Ok(String::new());
-    }
+/// 时间线的行数据（JSON）。
+///
+/// 顺序是**下新上旧**：像一条流水，最新的一条贴着底部输入框。
+/// 行的结构由 `assets/view.js` 拼，class 仍然来自 `view.css`。
+fn timeline_json(
+    conn: &Connection,
+    goals: &HashMap<i64, Goal>,
+    today: NaiveDate,
+) -> Result<String> {
+    Ok(rows_json(&db::checkins_all(conn)?, goals, today))
+}
 
-    // 按天分组（已按 day DESC 排好）
-    let mut groups: Vec<(String, Vec<Checkin>)> = Vec::new();
+/// 把一串记录拼成流水行。
+///
+/// 主视图（全部记录）和详情页（某个目标的记录）共用这一个函数，
+/// 所以两处的行结构不可能走样。
+fn rows_json(checkins: &[crate::model::Checkin], goals: &HashMap<i64, Goal>, today: NaiveDate) -> String {
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    let mut last_day = String::new();
+
     for c in checkins {
-        match groups.last_mut() {
-            Some((d, v)) if *d == c.day => v.push(c),
-            _ => groups.push((c.day.clone(), vec![c])),
+        if c.day != last_day {
+            if let Ok(d) = metrics::parse_day(&c.day) {
+                let (label, wd) = day_label(&d, today);
+                // 具体年月日**不进可见文本**，进 title：
+                // 平时需要的是「哪天」和星期几，精确到日的只在真的要对账时才要。
+                // 放进 title 之后，悬停就能拿到，而且不占流水的横向空间。
+                rows.push(json!({
+                    "k": "d",
+                    "label": label,
+                    "wd": wd.unwrap_or_default(),
+                    "title": format!("{} {}", c.day, weekday_cn(d)),
+                }));
+            }
+            last_day = c.day.clone();
         }
+        // goal_id 可以是 None：记了一条但没关联目标。
+        let (color, title, linked) = match c.goal_id.and_then(|id| goals.get(&id)) {
+            Some(g) => (g.color.clone(), g.title.clone(), true),
+            None => ("none".to_string(), "没关联目标".to_string(), false),
+        };
+        let text = if c.note.trim().is_empty() {
+            "手工打卡".to_string()
+        } else {
+            c.note.trim().to_string()
+        };
+        rows.push(json!({
+            "k": "e", "time": c.time, "text": text, "sub": "手工打卡",
+            "goal": title, "color": color, "linked": linked,
+        }));
     }
 
-    let mut out = String::new();
-    for (day, items) in groups {
-        let d = match metrics::parse_day(&day) {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
-        let (label, wd) = day_label(&d, today);
-        out.push_str(&format!(
+    // 字符串里的 `<` 必须转义成 \u003c：一条备注里只要出现 `</script>`，
+    // 这个 JSON 块就会被 HTML 解析器提前关掉，整页脚本全废。
+    serde_json::Value::Array(rows).to_string().replace('<', "\\u003c")
+}
+
+// ------------------------------------------------------------ 目标详情
+
+/// 一个目标的详情页。点卡片进来的。
+///
+/// **整个窗口只显示这一个目标**，所以不再分两栏——这一屏是「我在看这个目标」，
+/// 不是「我在扫全部」。
+///
+/// 读的状态和编辑的表单都在这里一次渲染好，JS 只负责切换显隐。
+/// 这样「目标长什么样」仍然只有一处定义。
+fn detail_body(conn: &Connection, today: NaiveDate, g: &Goal) -> Result<String> {
+    let s = metrics::series(conn, g.id, today)?;
+    let srcs = db::sources_of(conn, g.id)?;
+    let n = db::checkin_count(conn, g.id)?;
+
+    let kind_options: String = [
+        crate::model::SourceKind::ManualCheckin,
+        crate::model::SourceKind::GitCommits,
+        crate::model::SourceKind::ExternalMetric,
+        crate::model::SourceKind::Derived,
+    ]
+    .iter()
+    .map(|k| {
+        format!(
+            r#"<button type="button" class="kind" data-kind="{k}"><b>{label}</b><span>{desc}</span></button>"#,
+            k = k.as_str(),
+            label = k.label(),
+            desc = match k {
+                crate::model::SourceKind::ManualCheckin => "我自己记一次",
+                crate::model::SourceKind::GitCommits => "某个仓库的提交数（还没接入）",
+                crate::model::SourceKind::ExternalMetric => "读别处已经记着的数（还没接入）",
+                crate::model::SourceKind::Derived => "上面几条按公式算（还没接入）",
+            },
+        )
+    })
+    .collect();
+
+    let mut rules = String::new();
+    for src in &srcs {
+        rules.push_str(&format!(
             r#"
-    <div class="day">
-      <div class="dlabel"><span class="dl">{label}</span><span class="dd">{day}</span>{wd}</div>"#,
-            label = esc(&label),
-            day = day,
-            wd = wd.map(|w| format!(r#"<span class="dw">{w}</span>"#)).unwrap_or_default(),
-        ));
-        for c in items {
-            let g = goals.get(&c.goal_id);
-            let (color, title) = match g {
-                Some(g) => (g.color.clone(), g.title.clone()),
-                None => ("none".into(), "（已删除）".into()),
-            };
-            let act = if c.note.trim().is_empty() {
-                "手工打卡".to_string()
-            } else {
-                esc(c.note.trim())
-            };
-            out.push_str(&format!(
-                r#"
-      <div class="entry">
-        <div class="time">{time}</div>
-        <div class="rail"><span class="dot {color}"></span></div>
-        <div class="body"><div class="act">{act}</div><div class="sub">手工打卡</div></div>
-        <div class="tags"><span class="chip {color}">{title}</span></div>
+      <div class="rule">
+        <div>
+          <div class="rkind">{kind}{unimpl}</div>
+          {target}
+          {why}
+        </div>
+        <button type="button" class="x" data-src="{id}" title="删掉这条规则">删</button>
       </div>"#,
-                time = esc(&c.time),
-                color = esc(&color),
-                act = act,
-                title = esc(&title),
-            ));
-        }
-        out.push_str("\n    </div>");
+            kind = src.kind.label(),
+            unimpl = if src.kind.implemented() { "" } else { "（未接入）" },
+            target = if src.target.trim().is_empty() {
+                String::new()
+            } else {
+                format!(r#"<div class="rtarget">{}</div>"#, esc(src.target.trim()))
+            },
+            why = if src.rationale.trim().is_empty() {
+                String::new()
+            } else {
+                format!(r#"<div class="rwhy">{}</div>"#, esc(src.rationale.trim()))
+            },
+            id = src.id,
+        ));
     }
-    Ok(out)
+    if srcs.is_empty() {
+        rules.push_str(
+            r#"<div class="hint">还没有判定规则。没有它，这个目标给不出「什么算推进它」——曲线永远不会动。</div>"#,
+        );
+    }
+
+    let has = s.has_data;
+    let (vclass, val) = if has {
+        ("dval", num(s.current))
+    } else {
+        ("dval zero", "0".to_string())
+    };
+
+    // 有记录就删不掉。把理由写在按钮旁边，别让人点完了才知道。
+    let del_blocked = n > 0;
+    let del_note = if del_blocked {
+        format!(
+            r#"<div class="hint">已经记了 {n} 条，所以删不掉。动过的历史不该被一次点击抹掉——
+            不要了请走归档，它会保留曲线和放弃的理由。</div>"#
+        )
+    } else {
+        r#"<div class="hint">还没有任何记录，所以可以直接删掉。删了就没了，归档则会留下痕迹。</div>"#
+            .to_string()
+    };
+
+    Ok(format!(
+        r#"
+<div class="detail" data-goal="{id}"><div class="dinner">
+  <a class="back" href="/">← 返回主页</a>
+
+  <div id="dview">
+    <div class="dhead {color}">
+      <span class="dtitle"><i></i>{title}</span>
+      <span class="{vclass}">{val}</span>
+    </div>
+    {why}
+  </div>
+
+  <div id="deditform" hidden>
+    <div class="field"><label>名字</label><input id="etitle" maxlength="40" value="{title_attr}"></div>
+    <div class="field"><label>为什么想做</label><textarea id="ewhy" rows="3">{why_text}</textarea></div>
+    <div class="dacts" style="border:0;padding:0;margin-top:14px">
+      <button type="button" id="esave">保存</button>
+      <button type="button" id="ecancel">取消</button>
+    </div>
+  </div>
+
+  <div class="dcurve {color}">{curve}</div>
+
+  <section class="dsec">
+    <h3>判定规则<span>什么算推进它</span></h3>
+    <div id="rules">{rules}</div>
+    <button type="button" class="back" id="addrbtn">＋ 加一条规则</button>
+    <div id="addrform" hidden style="margin-top:12px">
+      <div id="addrkinds">{kind_options}</div>
+      <div class="field" id="addrtarget" hidden>
+        <label>具体是哪个？<span id="addrhint"></span></label>
+        <input id="artarget" maxlength="120">
+      </div>
+      <div class="field"><label>什么算推进它</label><input id="arrationale" maxlength="120"
+        placeholder="比如：读完一章，或做完一章题，算一次"></div>
+      <div class="dacts" style="border:0;padding:0;margin-top:10px">
+        <button type="button" id="arsave">加上</button>
+        <button type="button" id="arcancel">取消</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="dacts">
+    <button type="button" id="dedit">修改</button>
+    <button type="button" id="darch">归档</button>
+    <button type="button" id="ddel" class="danger"{del_disabled}>删除</button>
+  </div>
+  {del_note}
+  <div id="derr" class="warnline" hidden></div>
+
+  <div id="darchform" hidden style="margin-top:16px">
+    <div class="field"><label>为什么放弃它？</label>
+      <textarea id="areason" rows="2" placeholder="这句话三个月后你会想再看一眼"></textarea></div>
+    <div class="dacts" style="border:0;padding:0;margin-top:10px">
+      <button type="button" id="asave">归档</button>
+      <button type="button" id="acancel">取消</button>
+    </div>
+  </div>
+
+  <section class="dsec">
+    <h3>记录<span>{n} 条</span></h3>
+    <div class="dlog" id="log"><div class="log-canvas" id="log-canvas"><div class="log-rows" id="log-rows"></div></div></div>
+    <div id="log-empty" class="hint" hidden>这个目标还没有任何记录。回主页，在底部输入框里记一条。</div>
+  </section>
+</div></div>"#,
+        id = g.id,
+        color = esc(&g.color),
+        title = esc(&g.title),
+        vclass = vclass,
+        val = val,
+        why = if g.why.trim().is_empty() {
+            r#"<p class="dwhy">还没有写「为什么想做」。</p>"#.to_string()
+        } else {
+            format!(r#"<p class="dwhy">{}</p>"#, esc(g.why.trim()))
+        },
+        title_attr = esc(&g.title),
+        why_text = esc(g.why.trim()),
+        curve = curve_svg(&s),
+        rules = rules,
+        kind_options = kind_options,
+        n = n,
+        del_disabled = if del_blocked { " disabled" } else { "" },
+        del_note = del_note,
+    ))
 }
 
 // ------------------------------------------------------------ 主入口
 
-pub fn render(conn: &Connection, today: NaiveDate, chrome: Chrome) -> Result<String> {
+/// 渲染一屏。
+///
+/// `goal` 为 `Some(id)` 时渲染这个目标的详情页（整个窗口只显示它），
+/// 否则渲染主视图。详情页走的是**服务端路由**（`?goal=N`）——
+/// 于是「只显示一个目标」不需要在 JS 里再维护一套模板，Rust 仍然是唯一的渲染处。
+pub fn render(
+    conn: &Connection,
+    today: NaiveDate,
+    chrome: Chrome,
+    goal: Option<i64>,
+) -> Result<String> {
     let goals = db::goal_list(conn, false)?;
     let goal_map: HashMap<i64, Goal> = goals.iter().map(|g| (g.id, g.clone())).collect();
 
-    // 左栏
-    let mut cards = String::new();
-    for g in &goals {
-        let s = metrics::series(conn, g.id, today)?;
-        cards.push_str(&card_html(g, &s, &rule_line(conn, g)?));
-    }
-    // 没有判定规则的目标要显式警告 —— 它们的曲线永远不会动。
-    let no_rule: Vec<String> = db::goals_without_rule(conn)?
-        .into_iter()
-        .map(|g| g.title)
-        .collect();
+    // 目标不存在（链接过期、被删了）就退回主视图，不要给一页空白。
+    let focused = match goal {
+        Some(id) => goals.iter().find(|g| g.id == id).cloned(),
+        None => None,
+    };
 
-    let body = if goals.is_empty() {
-        r#"
-    <div class="empty">
-      还没有任何目标。<br><br>
-      现在只能用命令行建。建目标时要一并写清「什么算推进它」——<br>
-      没有判定规则的目标，曲线永远不会动。<br><br>
-      <code>baseline goal add "计算机基础" --why "基础知识匮乏" --color blue</code><br>
-      <code>baseline source add "计算机基础" --kind manual_checkin --rationale "读完一章或做完一章题算一次"</code><br><br>
-      然后打卡：<br><br>
-      <code>baseline checkin "计算机基础" --note "读完 CSAPP 第 3 章"</code><br><br>
-      建完按 <b>F5</b> 刷新这个窗口。
-    </div>"#
-            .to_string()
+    let (bar, win_title, composer, addgoal) = match chrome {
+        // 无边框窗口的标题栏、任务栏、Alt-Tab 都跟着文档标题走。
+        // 那里只该出现产品名——日期是刚从页面上删掉的东西，不该从任务栏溜回来。
+        Chrome::Window => (
+            title_bar_html(),
+            "基线".to_string(),
+            composer_html(conn, &goals)?,
+            addgoal_html(),
+        ),
+        // 导出的文件在浏览器里是一个标签页，带日期才分得清是哪天导的。
+        // 没有外壳就没有提交的去处，输入框和加号都不画。
+        Chrome::File => ("", format!("基线 · {today}"), String::new(), String::new()),
+    };
+
+    let (body, log_json) = if let Some(g) = &focused {
+        (
+            detail_body(conn, today, g)?,
+            rows_json(&db::checkins_of(conn, g.id)?, &goal_map, today),
+        )
     } else {
-        format!(
-            r#"
+        let mut cards = String::new();
+        for g in &goals {
+            let s = metrics::series(conn, g.id, today)?;
+            let clickable = chrome == Chrome::Window;
+            cards.push_str(&card_html(g, &s, &rule_line(conn, g)?, clickable));
+        }
+        // 没有判定规则的目标要显式警告 —— 它们的曲线永远不会动。
+        let no_rule: Vec<String> = db::goals_without_rule(conn)?
+            .into_iter()
+            .map(|g| g.title)
+            .collect();
+        let warn = if no_rule.is_empty() {
+            String::new()
+        } else {
+            format!(
+                r#"
+        <div class="warn">这些目标<b>没有判定规则</b>，曲线永远不会动：<b>{}</b><br>
+          点开它们，在「判定规则」里补上。</div>"#,                esc(&no_rule.join("、"))
+            )
+        };
+        // 左栏空了的时候不留一片白：告诉他一件事该怎么做，而且这件事就在手边。
+        let nogoal = if goals.is_empty() {
+            r#"<div class="nogoal">还没有目标。<br>点左下角的「新建目标」——建的时候要一并写清「什么算推进它」，不然那条曲线永远不会动。</div>"#
+        } else {
+            ""
+        };
+        (
+            format!(
+                r#"
   <div class="cols">
-    <div class="left">{cards}{lsum}</div>
-    <div class="right">{timeline}</div>
+    <div class="left">
+      <div class="goals">{nogoal}{cards}{warn}</div>{addgoal}
+    </div>
+    <div class="right">
+      <div class="log" id="log"><div class="log-canvas" id="log-canvas"><div class="log-rows" id="log-rows"></div></div></div>{composer}
+      <div class="dlg" id="dlg" hidden></div>
+    </div>
   </div>"#,
-            cards = cards,
-            lsum = if no_rule.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    r#"
-      <div class="warn">这些目标<b>没有判定规则</b>，曲线永远不会动：<b>{}</b><br>
-        用 <code>baseline source add</code> 给它们写清「什么算推进它」。</div>"#,
-                    esc(&no_rule.join("、"))
-                )
-            },
-            timeline = timeline_html(conn, &goal_map, today)?,
+                nogoal = nogoal,
+                cards = cards,
+                warn = warn,
+                addgoal = addgoal,
+                composer = composer,
+            ),
+            timeline_json(conn, &goal_map, today)?,
         )
     };
 
-    let (bar, js, title) = match chrome {
-        // 无边框窗口的标题栏、任务栏、Alt-Tab 都跟着文档标题走。
-        // 那里只该出现产品名——日期是刚从页面上删掉的东西，不该从任务栏溜回来。
-        Chrome::Window => (title_bar_html(), TITLE_BAR_JS, "基线".to_string()),
-        // 导出的文件在浏览器里是一个标签页，带日期才分得清是哪天导的。
-        Chrome::File => ("", "", format!("基线 · {today}")),
+    // 详情页的标题带上目标名——任务栏和 Alt-Tab 里一眼看得出在看哪个。
+    let title = match (&focused, chrome) {
+        (Some(g), Chrome::Window) => format!("基线 · {}", g.title),
+        (Some(g), Chrome::File) => format!("基线 · {} · {today}", g.title),
+        (None, _) => win_title,
     };
 
     Ok(format!(
@@ -416,14 +677,16 @@ pub fn render(conn: &Connection, today: NaiveDate, chrome: Chrome) -> Result<Str
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
 <style>{css}</style></head><body>{bar}
-<div class="wrap">
-{body}
-</div>{js}</body></html>"#,
+<div class="wrap">{body}
+</div>
+<script type="application/json" id="log-data">{log_json}</script>
+<script>{view_js}</script></body></html>"#,
         title = title,
         css = CSS,
         bar = bar,
         body = body,
-        js = js,
+        log_json = log_json,
+        view_js = VIEW_JS,
     ))
 }
 
@@ -446,10 +709,11 @@ pub fn error_page(message: &str) -> String {
     <p>窗口起来了，但读不到数据库。原始错误：</p>
     <pre>{message}</pre>
   </div>
-</div>{js}</body></html>"#,
+</div>
+<script>{view_js}</script></body></html>"#,
         css = CSS,
         bar = title_bar_html(),
-        js = TITLE_BAR_JS,
+        view_js = VIEW_JS,
         message = esc(message),
     )
 }

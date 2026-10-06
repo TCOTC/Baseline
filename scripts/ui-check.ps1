@@ -136,12 +136,17 @@ try {
     $cardX = $offX + [int](($contentLeft + 20) * $g.Scale)
     $cardW = [int](260 * $g.Scale)
     $tlX = $offX + [int](($contentLeft + 360) * $g.Scale)
-    $tlW = [int](($g.CssWidth - $contentLeft - 360 - 40) * $g.Scale)
+    # 右边少算 14px：滚动条会淡入淡出，把它算进比较区域的话，
+    # 什么都没滚动也会报出 0.5% 的差异——那点差异会被读成「动了」。
+    $tlW = [int](($g.CssWidth - $contentLeft - 360 - 54) * $g.Scale)
+    # 纵向也躲开底部输入框。
     $regionY = $offY + [int](70 * $g.Scale)
-    $regionH = [int](($g.CssHeight - 160) * $g.Scale)
+    $regionH = [int](($g.CssHeight - 190) * $g.Scale)
 
     $s1 = Join-Path $OutDir 'scroll-0.png'; Save-Shot -Path $s1 | Out-Null
-    Invoke-Wheel -X ($g.CssWidth / 2) -Y 400 -Notches -5
+    # 流水是**下新上旧**、一进来就落到底，所以往下滚什么都不会发生——
+    # 要往历史里翻得往上滚。方向搞反的表现和「滚动没生效」一模一样。
+    Invoke-Wheel -X ($g.CssWidth / 2) -Y 400 -Notches 5
     $s2 = Join-Path $OutDir 'scroll-1.png'; Save-Shot -Path $s2 | Out-Null
 
     $cardsMoved = Test-SameRegion -PathA $s1 -PathB $s2 -X $cardX -Y $regionY -W $cardW -H $regionH
@@ -149,7 +154,7 @@ try {
     Check '滚时间线：时间线动' ($tlMoved.Ratio -gt 0.05) ("差异 {0:P1}" -f $tlMoved.Ratio)
     Check '滚时间线：卡片不动' ($cardsMoved.Ratio -lt 0.005) ("差异 {0:P1}" -f $cardsMoved.Ratio)
 
-    Invoke-Wheel -X ($contentLeft + 100) -Y 300 -Notches -5
+    Invoke-Wheel -X ($contentLeft + 100) -Y 300 -Notches 5
     $s3 = Join-Path $OutDir 'scroll-2.png'; Save-Shot -Path $s3 | Out-Null
     $tlAfter = Test-SameRegion -PathA $s2 -PathB $s3 -X $tlX -Y $regionY -W $tlW -H $regionH
     Check '滚卡片：时间线不动' ($tlAfter.Ratio -lt 0.005) ("差异 {0:P1}" -f $tlAfter.Ratio)

@@ -25,6 +25,12 @@
   --pad:30px;
   --outer:max(0px, (100vw - var(--content)) / 2);
 
+  /* 流水的行高。虚拟滚动靠它算总高和偏移，所以必须是固定值——
+     行高一变（备注换行、字号跟随系统），滚动位置立刻就会飘。
+     值只有这一处，view.js 用 getComputedStyle 读它，两边不会各写一份。 */
+  --row-day:34px;
+  --row-entry:46px;
+
   /* 窗口按钮。前四个的取值来自实测：在真实的 Windows 11 标题栏上
      （DeepSeek Harness 的 WCO 覆盖层）悬停取样，再在原生的 regedit 窗口上交叉验证。 */
   --cap-ink:#0f1115;          /* 实测 */
@@ -107,37 +113,220 @@ body{
   grid-template-columns:308px 1fr; gap:34px;
   padding:10px 0 0 calc(var(--pad) + var(--outer));
 }
-/* 两栏各自滚动。一列是「三条曲线的现状」，一列是「这些天做过什么」，
-   长度差得很远；绑在同一个滚动条上时，看时间线就一定会把卡片推出视野。 */
-.left{
-  display:flex; flex-direction:column; gap:12px;
+/* 左栏：卡片自己滚，「新建目标」钉在底部左下角。
+   钉住而不是跟着滚——它是这一栏的入口，不该被三张卡挤出视野。 */
+.left{display:flex; flex-direction:column; min-height:0}
+.goals{
+  flex:1; min-height:0; display:flex; flex-direction:column; gap:12px;
   overflow-y:auto; overflow-x:hidden;
-  padding-bottom:30px;
+  padding-bottom:12px;
 }
-/* 右栏一直伸到窗口右边缘——滚动条因此贴在窗口边上，而不是浮在内容旁边。
-   右内边距把时间线推回 1120px 网格，和滚动条互不干扰。
-   scrollbar-gutter 让滚动条出现前后内容不跳。 */
-.right{
-  overflow-y:auto; overflow-x:hidden;
-  scrollbar-gutter:stable;
-  padding:0 calc(var(--pad) + var(--outer)) 30px 0;
+/* 底边距和输入框的 18px 对齐：左栏的加号和右栏那个框的底边应当落在同一条线上，
+   差 4px 眼睛看得出来，而且说不出哪里别扭。 */
+.addgoal{
+  flex:none; align-self:flex-start;
+  display:flex; align-items:center; gap:7px;
+  margin:6px 0 18px; padding:7px 12px 7px 10px;
+  background:none; border:1px dashed var(--bd-2); border-radius:10px;
+  color:var(--tx-3); font:inherit; font-size:12.5px; cursor:default;
 }
+.addgoal svg{display:block; width:11px; height:11px}
+.addgoal:hover{border-color:var(--tx-3); color:var(--tx-2)}
+.addgoal[disabled]{opacity:.45}
+.addgoal[disabled]:hover{border-color:var(--bd-2); color:var(--tx-3)}
 
-/* 滚动条也走设计规范：细、圆头、无箭头，静的时候几乎看不见。
+/* 右栏：一条流水 + 底部输入框。
+   右栏一直伸到窗口右边缘，**内边距一律加在真正滚动/装内容的那个元素上**，
+   不要加在 .right 上——加在父级会把 .log 整体往左推，滚动条跟着进来一百多像素，
+   看起来就是「滚动条不靠边了」。 */
+.right{display:flex; flex-direction:column; min-height:0}
+.log{
+  flex:1; min-height:0; overflow-y:auto; overflow-x:hidden;
+  scrollbar-gutter:stable;
+  padding:0 calc(var(--pad) + var(--outer)) 16px 0;
+}
+/* 虚拟滚动的画布：整条流水的高度撑在这里，可见的那几十行绝对定位在里面。
+   画布高度 = 所有行的固定高度之和，行本身不参与文档流。 */
+.log-canvas{position:relative}
+.log-rows{position:absolute; left:0; right:0; top:0}
+.log-hint{padding:24px 2px; color:var(--tx-3); font-size:13px; line-height:1.9}
+.log-hint code{font-family:var(--ff-mono);font-size:12.5px;background:var(--sf-2);
+  padding:2px 7px;border-radius:5px;color:var(--tx-2)}
+
+/* ---------------- 底部输入框 ---------------- */
+/* 上下两层：上面写文本，下面一行左边是「记到哪个目标」、右边是「记下」。
+   整个框是一个圆角矩形，里面全是无边框元素——边框和焦点态由框负责，
+   这样「光标在框里」是一件看得见的事。
+   目标按钮摆在下面那行而不是输入区上方：关联目标是这条记录的**属性**，
+   不是记录本身；摆在上面会让人以为得先选目标才能打字。 */
+.composer{
+  flex:none; position:relative;
+  padding:10px calc(var(--pad) + var(--outer)) 18px 0;
+}
+/* display:flex 会盖掉 [hidden] 自带的 display:none，得自己写一条。 */
+.composer[hidden]{display:none}
+.composer .box{
+  display:flex; flex-direction:column;
+  background:var(--sf); border:1px solid var(--bd-2); border-radius:12px;
+  padding:8px 8px 8px 12px;
+}
+.composer .box:focus-within{border-color:var(--blue)}
+.composer textarea{
+  display:block; width:100%;
+  border:0; background:none; outline:none; resize:none;
+  font:inherit; font-size:13.5px; line-height:1.5; color:var(--tx);
+  padding:2px 0 6px; margin:0;
+  /* 高度由 JS 按内容撑，这里给个上限，免得一句话糊满半个窗口 */
+  max-height:160px; overflow-y:auto;
+}
+.composer textarea::placeholder{color:var(--tx-3)}
+.composer .crow{display:flex; align-items:center; justify-content:space-between; gap:8px}
+
+/* 目标按钮：一个安静的胶囊，带一个色点。点开是一列目标 + 「不关联目标」。 */
+.composer .gbtn{
+  display:inline-flex; align-items:center; gap:7px; min-width:0;
+  background:none; border:1px solid transparent; border-radius:99px;
+  padding:4px 10px 4px 7px; font:inherit; font-size:12px; color:var(--tx-3);
+  cursor:default;
+}
+.composer .gbtn:hover{border-color:var(--bd-2); color:var(--tx-2)}
+.composer .gbtn .dot{width:7px; height:7px; border-radius:50%; flex:none; background:var(--bd-2)}
+.composer .gbtn .dot.none{background:transparent; box-shadow:inset 0 0 0 1.5px var(--bd-2)}
+.composer .gbtn span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+
+/* 往上弹，不往下：下面是窗口边缘。 */
+.composer .gmenu{
+  position:absolute; left:calc(var(--pad) + var(--outer)); bottom:100%;
+  margin-bottom:6px; min-width:190px; max-width:320px;
+  background:var(--sf); border:1px solid var(--bd-2); border-radius:12px;
+  padding:5px; box-shadow:0 8px 24px rgba(0,0,0,.09); z-index:20;
+  display:flex; flex-direction:column; gap:1px;
+}
+.composer .gmenu[hidden]{display:none}
+.composer .gopt{
+  display:flex; align-items:center; gap:8px; text-align:left;
+  background:none; border:0; border-radius:8px; padding:7px 9px;
+  font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.composer .gopt:hover{background:var(--sf-2)}
+.composer .gopt.on{color:var(--tx); font-weight:650; background:var(--sf-2)}
+.composer .gopt i{width:7px; height:7px; border-radius:50%; flex:none; background:var(--c)}
+.composer .gopt.none i{background:transparent; box-shadow:inset 0 0 0 1.5px var(--bd-2)}
+
+.composer .send{
+  flex:none;
+  background:none; border:1px solid var(--bd-2); border-radius:9px;
+  padding:6px 12px; font:inherit; font-size:12.5px; color:var(--tx-2);
+  cursor:default;
+}
+.composer .send:hover{border-color:var(--tx-3); color:var(--tx)}
+.composer.busy .box,.composer.busy .send{opacity:.5}
+/* 提交失败时把框描红——只把按钮变灰会让人以为「点了没反应」。 */
+.composer.broke .box{border-color:var(--rose)}
+.composer.broke textarea::placeholder{color:var(--rose-tx)}
+
+/* 流水的一行。高度必须是**固定值**——虚拟滚动靠它算总高和偏移，
+   行高一变，滚动位置就会飘。所以备注不换行，超长省略（悬停看全文）。 */
+.day{height:var(--row-day); display:flex; align-items:flex-end;
+  padding:0 0 7px 2px}
+.entry{height:var(--row-entry); display:grid;
+  grid-template-columns:46px 22px 1fr auto; gap:10px; align-items:start;
+  padding-top:6px}
+.entry .act{white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+
+/* 滚动条走同一套：细、圆头、无箭头，静的时候几乎看不见。
    轨道占满窗口最右侧 10px，滑块靠 2px 同色内边距收窄——
-   既贴住窗口边缘，又不会粗得像一条边。 */
-.left::-webkit-scrollbar,.right::-webkit-scrollbar{width:10px}
-.left::-webkit-scrollbar-track,.right::-webkit-scrollbar-track{background:transparent}
-.left::-webkit-scrollbar-thumb,.right::-webkit-scrollbar-thumb{
+   既贴住窗口边缘，又不会粗得像一条边。
+   **凡是能滚的地方都要列在这里。** 漏掉一个，那一处的滚动条就是系统默认那条
+   又宽又深的灰杠，和别处放一起非常显眼（详情页就这么翻过车）。 */
+.goals::-webkit-scrollbar,
+.log::-webkit-scrollbar,
+.detail::-webkit-scrollbar,
+.dlog::-webkit-scrollbar,
+.dlg::-webkit-scrollbar,
+.composer textarea::-webkit-scrollbar{width:10px; height:10px}
+.goals::-webkit-scrollbar-track,
+.log::-webkit-scrollbar-track,
+.detail::-webkit-scrollbar-track,
+.dlog::-webkit-scrollbar-track,
+.dlg::-webkit-scrollbar-track,
+.composer textarea::-webkit-scrollbar-track{background:transparent}
+.goals::-webkit-scrollbar-thumb,
+.log::-webkit-scrollbar-thumb,
+.detail::-webkit-scrollbar-thumb,
+.dlog::-webkit-scrollbar-thumb,
+.dlg::-webkit-scrollbar-thumb,
+.composer textarea::-webkit-scrollbar-thumb{
   background:var(--bd-2); border-radius:99px; border:2px solid var(--bg);
 }
-.left::-webkit-scrollbar-thumb:hover,.right::-webkit-scrollbar-thumb:hover{
+.goals::-webkit-scrollbar-thumb:hover,
+.log::-webkit-scrollbar-thumb:hover,
+.detail::-webkit-scrollbar-thumb:hover,
+.dlog::-webkit-scrollbar-thumb:hover,
+.dlg::-webkit-scrollbar-thumb:hover,
+.composer textarea::-webkit-scrollbar-thumb:hover{
   background:var(--tx-3);
 }
+.goals::-webkit-scrollbar-corner,
+.detail::-webkit-scrollbar-corner,
+.dlog::-webkit-scrollbar-corner{background:transparent}
+
+/* ---------------- 新建目标对话 ---------------- */
+/* 只占右栏。目标是在左栏的卡片列里诞生的，对话不该跳到一个和卡片无关的整屏页面去。 */
+.dlg{flex:1; min-height:0; overflow-y:auto;
+  padding:4px calc(var(--pad) + var(--outer)) 30px 2px}
+.dlg-steps{display:flex; flex-direction:column; gap:2px; margin-bottom:22px}
+.dlg-steps div{font-size:11.5px; color:var(--tx-3); line-height:1.9}
+.dlg-steps div.done{color:var(--tx-2)}
+.dlg-steps div.now{color:var(--tx); font-weight:650}
+.dlg h2{font-size:15px; font-weight:700; margin-bottom:6px}
+.dlg p.note{font-size:12.5px; color:var(--tx-3); line-height:1.8; margin-bottom:14px}
+.dlg .answer{font-size:13px; color:var(--tx-2); line-height:1.9; margin-bottom:4px}
+.dlg .answer b{color:var(--tx); font-weight:650}
+.dlg input[type=text]{
+  width:100%; background:var(--sf); border:1px solid var(--bd-2); border-radius:10px;
+  padding:10px 12px; font:inherit; font-size:13.5px; color:var(--tx); outline:none;
+  margin-bottom:12px;
+}
+.dlg input[type=text]:focus{border-color:var(--blue)}
+.dlg .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+.dlg button{
+  background:none; border:1px solid var(--bd-2); border-radius:10px;
+  padding:8px 14px; font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default;
+}
+.dlg button:hover{border-color:var(--tx-3); color:var(--tx)}
+.dlg button.primary{border-color:var(--bd-2); background:var(--sf-2); color:var(--tx)}
+.dlg button.primary:hover{border-color:var(--tx-3)}
+.dlg button[disabled]{opacity:.45}
+.dlg button[disabled]:hover{border-color:var(--bd-2); color:var(--tx-2)}
+/* 四种来源的按钮。对话里和详情页里共用同一套——两处各写一遍，
+   迟早会一处改了另一处没改。 */
+button.kind{
+  display:block; width:100%; text-align:left; margin-bottom:8px; padding:11px 13px;
+  background:none; border:1px solid var(--bd-2); border-radius:10px;
+  font:inherit; cursor:default;
+}
+button.kind b{display:block; font-size:13px; color:var(--tx); font-weight:650; margin-bottom:2px}
+button.kind span{font-size:11.5px; color:var(--tx-3)}
+button.kind:hover{border-color:var(--tx-3)}
+button.kind.on{border-color:var(--tx-3); background:var(--sf-2)}
+
+.dlg .cur{margin-top:14px; padding:12px 14px; border:1px solid var(--bd);
+  border-radius:10px; background:var(--sf); font-size:12.5px; color:var(--tx-2); line-height:1.8}
+.dlg .cur b{font-size:19px; color:var(--tx); font-weight:700;
+  font-variant-numeric:tabular-nums; margin-right:3px}
+.dlg .bad{border-color:var(--bd-2); background:var(--sf-2); color:var(--tx-2)}
+
 
 /* ---------------- 目标卡 ---------------- */
 .card{background:var(--cbg);border:1px solid var(--cbd);border-radius:13px;
   padding:15px 16px 13px}
+/* 卡片整张是个链接，点开进这个目标的详情页。 */
+a.card{display:block;text-decoration:none;color:inherit;
+  transition:border-color .12s ease}
+a.card:hover{border-color:var(--c)}
+a.card:focus-visible{outline:2px solid var(--c);outline-offset:2px}
 .chead{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
 .ct{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:650;color:var(--ctx)}
 .ct i{width:8px;height:8px;border-radius:2.5px;background:var(--c);flex:none}
@@ -173,35 +362,35 @@ body{
 .lsum code{font-family:var(--ff-mono);font-size:11.5px;background:var(--sf-2);
   padding:1px 5px;border-radius:4px;color:var(--tx-2)}
 
-/* ---------------- 时间线 ---------------- */
-.day{margin-bottom:26px}
-.dlabel{display:flex;align-items:baseline;gap:9px;margin-bottom:6px;padding-left:2px}
+/* ---------------- 时间线（流水） ---------------- */
+/* 行的内容——高度已经在上面定死了，这里只管里面怎么排。 */
+.dlabel{display:flex;align-items:baseline;gap:9px;padding-left:2px}
 .dl{font-size:13px;font-weight:700}
 .dd{font-size:11.5px;color:var(--tx-3);font-variant-numeric:tabular-nums}
 .dw{font-size:11.5px;color:var(--tx-3)}
 
-.entry{display:grid;grid-template-columns:46px 22px 1fr auto;gap:10px;align-items:start;
-  padding:7px 0}
 .time{font-size:11.5px;color:var(--tx-3);font-variant-numeric:tabular-nums;
   font-family:var(--ff-mono);text-align:right;padding-top:2px}
-.rail{position:relative;align-self:stretch;min-height:34px}
+/* 竖线只在一组之内连起来：一组是「同一天」。 */
+.rail{position:relative;align-self:stretch}
 .rail::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;
   background:var(--line);transform:translateX(-50%)}
 .rail .dot{position:absolute;left:50%;top:6px;width:9px;height:9px;border-radius:50%;
   background:var(--c);transform:translateX(-50%);z-index:1;
   box-shadow:0 0 0 3px var(--bg)}
+/* 没关联目标的记录：空心点，安静但不隐藏。它确实发生过。 */
+.rail .dot.none{background:var(--bg);
+  box-shadow:inset 0 0 0 2px var(--bd-2), 0 0 0 3px var(--bg)}
+.day + .entry .rail::before{top:-6px}
 .body .act{font-size:13.5px;font-weight:600;letter-spacing:-.005em}
+.entry.unlinked .act{font-weight:500;color:var(--tx-2)}
 .body .sub{font-size:11.5px;color:var(--tx-3);margin-top:1px}
 .tags{display:flex;align-items:center;gap:8px;padding-top:2px}
 .chip{font-size:11px;font-weight:650;padding:3px 9px;border-radius:99px;
   background:var(--cbg);color:var(--ctx);border:1px solid var(--cbd);white-space:nowrap}
 .chip.none{background:transparent;color:var(--tx-3);border-style:dashed}
 
-.empty{flex:1;min-height:0;overflow-y:auto;
-  padding:52px calc(var(--pad) + var(--outer)) 30px;
-  color:var(--tx-3);font-size:13px;line-height:1.9}
-.empty code{font-family:var(--ff-mono);font-size:12.5px;background:var(--sf-2);
-  padding:2px 7px;border-radius:5px;color:var(--tx-2)}
+.nogoal{padding:2px 2px 10px;color:var(--tx-3);font-size:13px;line-height:1.9}
 
 .warn{margin-top:16px;padding:14px 18px;background:#fffbeb;border-left:3px solid var(--amber);
   border-radius:0 10px 10px 0;font-size:12.5px;color:var(--amber-tx);line-height:1.75}
@@ -219,12 +408,85 @@ body{
   border:1px solid var(--bd);border-radius:10px;padding:14px 16px;
   white-space:pre-wrap;word-break:break-word}
 
+/* ---------------- 目标详情 ---------------- */
+/* 点卡片进来的。整个窗口只显示这一个目标，所以不再分两栏——
+   这一屏是「我在看这个目标」，不是「我在扫全部」。 */
+.detail{flex:1; min-height:0; overflow-y:auto; padding:4px 0 40px}
+.dinner{max-width:760px; margin:0 auto; padding:0 30px}
+
+.back{
+  display:inline-flex; align-items:center; gap:6px;
+  background:none; border:0; padding:4px 8px 4px 0; margin-bottom:14px;
+  font:inherit; font-size:12.5px; color:var(--tx-3); cursor:default;
+}
+.back:hover{color:var(--tx)}
+
+.dhead{display:flex; align-items:center; justify-content:space-between; gap:12px}
+.dtitle{display:flex; align-items:center; gap:9px; font-size:20px; font-weight:700;
+  letter-spacing:-.02em}
+.dtitle i{width:11px; height:11px; border-radius:3px; background:var(--c); flex:none}
+.dval{font-size:22px; font-weight:750; color:var(--c);
+  font-variant-numeric:tabular-nums; letter-spacing:-.03em}
+.dval.zero{color:var(--tx-3); font-weight:400}
+.dwhy{margin-top:6px; font-size:13px; color:var(--tx-2); line-height:1.8}
+.dcurve{margin-top:16px}
+.dcurve svg{height:96px}
+
+.dsec{margin-top:30px; border-top:1px solid var(--bd); padding-top:16px}
+.dsec h3{font-size:12.5px; font-weight:700; color:var(--tx-2); margin-bottom:10px}
+.dsec h3 span{font-weight:400; color:var(--tx-3); margin-left:6px}
+
+.rule{
+  display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+  padding:9px 0; border-bottom:1px solid var(--bd);
+}
+.rule:last-of-type{border-bottom:0}
+.rule .rkind{font-size:13px; font-weight:650; color:var(--tx)}
+.rule .rtarget{font-size:11.5px; color:var(--tx-3); margin-top:1px}
+.rule .rwhy{font-size:12.5px; color:var(--tx-2); margin-top:3px; line-height:1.7}
+.rule .x{
+  flex:none; background:none; border:0; padding:2px 4px;
+  font:inherit; font-size:11.5px; color:var(--tx-3); cursor:default;
+}
+.rule .x:hover{color:var(--tx)}
+
+.dacts{display:flex; gap:8px; flex-wrap:wrap; margin-top:30px;
+  border-top:1px solid var(--bd); padding-top:16px}
+.dacts button{
+  background:none; border:1px solid var(--bd-2); border-radius:10px;
+  padding:8px 14px; font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default;
+}
+.dacts button:hover{border-color:var(--tx-3); color:var(--tx)}
+.dacts button[disabled]{opacity:.4}
+.dacts button[disabled]:hover{border-color:var(--bd-2); color:var(--tx-2)}
+.dacts button.danger:hover{border-color:var(--rose); color:var(--rose-tx)}
+/* 两步确认的中间态：按钮自己变成问句，且明显不一样。 */
+.dacts button.armed{border-color:var(--rose); color:var(--rose-tx)}
+
+.field{margin-bottom:12px}
+.field label{display:block; font-size:11.5px; color:var(--tx-3); margin-bottom:5px}
+.field input,.field textarea{
+  width:100%; background:var(--sf); border:1px solid var(--bd-2); border-radius:10px;
+  padding:9px 12px; font:inherit; font-size:13.5px; color:var(--tx); outline:none;
+  resize:none;
+}
+.field input:focus,.field textarea:focus{border-color:var(--blue)}
+.hint{font-size:12px; color:var(--tx-3); line-height:1.8; margin-top:8px}
+.warnline{margin-top:14px; padding:11px 14px; background:#fffbeb;
+  border-left:3px solid var(--amber); border-radius:0 10px 10px 0;
+  font-size:12.5px; color:var(--amber-tx); line-height:1.75}
+.dlog{max-height:44vh; min-height:120px; overflow-y:auto; overflow-x:hidden;
+  scrollbar-gutter:stable; border-top:1px solid var(--bd)}
+/* 注意别去改 .entry 的高度：虚拟滚动靠固定行高算总高和偏移，
+   在这里把 height 改成 auto 会让行高随内容变，滚动位置立刻开始飘。 */
+
 @media(max-width:940px){
   /* 窄到放不下两栏时改成整页滚动，两栏各自滚就没有意义了，
      滚动条也回到页面边缘，不必再往窗口边上贴。 */
   .cols{grid-template-columns:1fr;overflow-y:auto;
     padding:10px var(--pad) 0}
   .left,.right{overflow:visible;padding:0}
-  .left{padding-bottom:12px}
+  .goals{overflow:visible;padding-bottom:12px}
+  .log{overflow:visible;padding-bottom:12px}
   .right{padding-bottom:24px}
 }
