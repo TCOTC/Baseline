@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "基线窗口自身需要的权限。界面不调用任何 Tauri 插件；窗口那几条是自绘顶栏要用的（系统边框已关掉，最小化/最大化/关闭/拖动都得自己接）。",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-internal-toggle-maximize"
+  ]
+}

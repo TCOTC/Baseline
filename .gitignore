@@ -1,5 +1,6 @@
 /target
 /data
+/src-tauri/gen/schemas
 *.db
 *.db-journal
 *.db-wal

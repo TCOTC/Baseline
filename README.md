@@ -26,7 +26,51 @@
 
 ```powershell
 cargo build
+cargo run -- init      # 建库（幂等）。会把库的完整路径打出来
+```
 
+### 桌面窗口
+
+```powershell
+cargo run -p baseline-desktop
+```
+
+窗口不自己渲染界面：内核把整页渲染成一个 HTML 串，外壳把它挂在自定义协议上，
+所以**没有本地服务、没有监听端口**。每次加载都现开库、现补快照、现渲染——
+**F5 就是刷新数据**，不存在界面上数字比库里旧的情况。
+
+`--db <路径>` 可以临时指向别的库，不写就用正式库。库的位置是
+`%APPDATA%\Baseline\baseline.db`（可用环境变量 `BASELINE_DB` 覆盖），
+和 CLI 共用同一个，不放在 exe 旁边——安装到 Program Files 后那个目录只读，
+而库必须可写。
+
+关于窗口本身的三件事：
+
+- **顶栏是自绘的**，系统边框已关掉（`decorations(false)`）。顶栏横跨整个窗口宽度——
+  它是窗口的边框，不是页面的头部，所以里面**不放产品名、不放日期**。
+  缩放拖拽和 Aero Snap 都还在；唯一少掉的是 Win11 悬停最大化按钮时的 Snap Layouts
+  弹层——tao 没有 `HTMAXBUTTON` 支持。
+- **窗口按钮是照 Windows 量的，不是设计的**。尺寸（46×40）、图标（10px）、
+  hover（`#d8d9da`）、关闭键 hover（`#e81123`）都来自在真实 Windows 11 标题栏上取样；
+  图标直接用 **Segoe Fluent Icons** 的字符（`E921`/`E922`/`E923`/`E8BB`），
+  也就是系统标题栏自己用的那四个字形，所以形状不可能不一样。细节见下面的「两个坑」。
+- **左右两栏各自独立滚动**。一列是「三条曲线的现状」，一列是「这些天做过什么」，
+  长度差得很远；绑在同一个滚动条上时，看时间线就一定会把卡片推出视野。
+- 界面上的 JS 异常会 POST 到 `/__jslog`，写进同目录的 `desktop.log`。
+  窗口没有开发工具，异常不主动送出来就等于不存在。
+
+### 自绘标题栏的两个坑
+
+1. **`-webkit-font-smoothing: antialiased` 在 WebView2 上不起作用。** 图标边缘会泛蓝泛橙：
+   实测真实系统图标的通道色差是 **6**（纯灰），开着次像素是 **130 以上**，摆一起一眼就看得出。
+   真正管用的是把按钮提到独立合成层（`transform: translateZ(0)`）——透明背底的合成层
+   不允许 LCD 文字。改完色差回到 6。
+2. **图标不要自己画 SVG。** `shape-rendering: crispEdges` 会把 X 这类斜线切成台阶状，
+   不用它又会糊。直接用系统字体，形状和 DPI 缩放都交给 Windows。
+
+### 命令行
+
+```powershell
 # 1. 建目标（活跃目标上限 3 个）
 cargo run -- goal add "计算机基础" --why "基础知识匮乏，想打扎实" --color blue
 
@@ -41,7 +85,10 @@ cargo run -- tick
 cargo run -- render --open
 ```
 
+建完目标按 F5，窗口里就有了。
+
 或者直接用演示数据跑一遍：`.\scripts\demo.ps1`（写 `data/_demo.db`，不碰你的正式库）。
+想让窗口看演示数据：`cargo run -p baseline-desktop -- --db data/_demo.db`。
 
 ---
 
@@ -58,10 +105,10 @@ cargo run -- render --open
 | `source list <目标>` | 列出判定规则 |
 | `checkin <目标> [--note] [--value] [--date] [--time]` | 记一条推进 |
 | `tick` | 补齐每日快照（幂等，已写入的日期不改写） |
-| `render [-o 路径] [--open]` | 生成 HTML |
+| `render [-o 路径] [--open]` | 导出单文件 HTML（存档或临时看） |
 | `status` | 终端速览各目标当前值 |
 
-全局参数：`--db <路径>`，默认 `data/baseline.db`。
+全局参数：`--db <路径>`，默认 `%APPDATA%\Baseline\baseline.db`。桌面窗口读的是同一个库。
 
 ### 计分来源类型（四种，是上限）
 
@@ -117,18 +164,68 @@ cargo run -- render --open
 ## 目录
 
 ```
-Baseline/
-├── Cargo.toml
-├── assets/view.css         设计规范的 CSS（零硬编码颜色）
-├── scripts/demo.ps1        演示数据（写 data/_demo.db）
+Baseline/                      Cargo 工作区
+├── Cargo.toml                 内核 + CLI
+├── assets/view.css            设计规范的 CSS（零硬编码颜色）
+├── scripts/
+│   ├── demo.ps1               演示数据（写 data/_demo.db）
+│   ├── icon.py                生成图标（产物已提交，没装 Python 也能构建）
+│   ├── ui.psm1                调试测试台：抓窗口 / 点击 / 拖动 / 滚轮 / 量像素
+│   ├── ui-check.ps1           端到端检查（15 项，退出码可当闸门）
+│   └── measure-caption.ps1    量真实 Windows 标题栏按钮（--cap-* 的出处）
 ├── src/
-│   ├── main.rs             CLI 入口与分发
-│   ├── model.rs            Goal / Source / Checkin / Snapshot
-│   ├── db.rs               SQLite schema + CRUD
-│   ├── metrics.rs          累积计算与每日快照
-│   └── render.rs           静态 HTML 渲染（阶梯曲线）
-└── data/                   运行时生成（已 gitignore）
+│   ├── lib.rs                 内核入口：db / metrics / model / render
+│   ├── main.rs                CLI 入口与分发
+│   ├── model.rs               Goal / Source / Checkin / Snapshot
+│   ├── db.rs                  SQLite schema + CRUD + 默认库位置
+│   ├── metrics.rs             累积计算与每日快照
+│   └── render.rs              HTML 渲染（阶梯曲线 + 顶栏 + 错误页）
+├── src-tauri/                 桌面外壳：窗口 + 自定义协议
+│   ├── src/main.rs
+│   └── tauri.conf.json
+└── data/                      运行时产物（已 gitignore）
 ```
+
+内核是 **lib** 而不是只藏在 bin 里。CLI 和窗口调用的是同一份实现——
+判定口径、累积方式、快照语义一旦有两份，两份就会开始讲不同的故事。
+
+---
+
+## 调试基础设施
+
+窗口是「无系统边框 + 自绘顶栏 + 两栏各自滚动」，**很多东西读代码看不出来**：
+拖动到底生不生效、最大化之后图标有没有跟着变、两栏是不是真的各滚各的、
+窗口按钮画得跟系统像不像。这些只能真的动鼠标、再去量屏幕——所以它们进了仓库，
+不是留在临时目录里的一次性脚本。
+
+```powershell
+# 端到端检查：真的点、真的拖、真的滚，再量屏幕确认。退出码 0/1
+powershell -ExecutionPolicy Bypass -File scripts/ui-check.ps1
+
+# 量一个真实 Windows 标题栏的按钮，验证 --cap-* 那组令牌还对不对
+powershell -ExecutionPolicy Bypass -File scripts/measure-caption.ps1 -Process regedit
+```
+
+`ui-check.ps1` 覆盖 15 项：窗口按钮贴不贴右边缘、顶栏左半边是不是空的、
+最大化/还原/最小化、顶栏能不能拖、拖动改不改尺寸、窗口在不在前台、
+滚时间线时卡片动不动、滚卡片时时间线动不动、界面有没有 JS 异常。
+截图落在 `data/_ui/`，可以对着看。
+
+### 这里面埋着四个坑，都踩过
+
+1. **`Process.MainWindowHandle` 不能用**，它按 Z 序取「第一个可见有标题的顶层窗口」。
+   debug 构建带一个控制台窗口，应用窗口一最小化就掉到 Z 序底部，`MainWindowHandle`
+   立刻指到控制台上——于是「点最小化后窗口变成 980×511 且再也点不动」这种**假 bug**
+   就出现了，而且看起来非常像真 bug。按窗口类名（`Tauri Window`）找才对。
+2. **坐标换算必须按窗口 DPI**，不能按「客户区宽 = 1280」反推——窗口一最大化就算错，
+   表现为「第二次点最大化没反应」。
+3. **滚轮只发给前台窗口。** 窗口不在前台时滚轮石沉大海，看起来就像独立滚动没实现。
+   置前要用 `AttachThreadInput` 绕过前台锁定，而且**要把是否成功当结果返回**。
+4. **`mouse_event` 的 WHEEL_DELTA 正负不能想当然。** 写反了的表现是「滚动没生效」，
+   而时间线本来就在顶部——现象和真 bug 一模一样。
+
+还有一条不属于测试台的：**所有 `.ps1` / `.psm1` 必须是 UTF-8 with BOM**。
+Windows PowerShell 5.1 会把无 BOM 的脚本按 ANSI 读，中文注释直接变成语法错误。
 
 ---
 
@@ -136,10 +233,17 @@ Baseline/
 
 | 层 | 选择 | 为什么 |
 |---|---|---|
-| 语言 | Rust 单 crate | 后续 git 适配器需要，且已有 Tauri 经验可复用 |
-| 存储 | rusqlite（bundled） | 现场编译 SQLite，不依赖系统 dll |
+| 语言 | Rust，单工作区 | 后续 git 适配器需要 |
+| 存储 | rusqlite（bundled） | 现场编译 SQLite，不依赖系统 dll，打包不用附带 sqlite3.dll |
 | 界面 | 静态 HTML + CSS 变量 + 手写 SVG | 设计规范逐字复用；不引图表库，曲线约 15 行 |
-| 外壳 | **暂无** | 阶段 A 用浏览器看即可，外壳是纯机械工作，随时可加 |
+| 外壳 | Tauri 2（系统 WebView2） | 不捆绑 Chromium，产物几 MB |
+
+**为什么界面是 Rust 渲染的字符串而不是前端框架**：整页只有三个数字、三条曲线、一列时间线。
+引入前端框架意味着设计规范要在 CSS 和 JS 里各维护一份，而「判定规则」这类核心逻辑
+会在两端各长出一个版本。现在只有一处渲染，改设计规范就是改一个 CSS 文件。
+
+**为什么不起本地 HTTP 服务**：单机单窗口不需要监听端口。起了服务就要操心端口被占、
+防火墙弹窗，以及「服务没起来所以窗口一片白」。自定义协议没有端口，生命周期跟着窗口走。
 
 **为什么不是 GPUI**：它的官方 README 写着「学习 API 最好的方式是读 Zed 源码」，
 且仍在 pre-1.0、API 常有 breaking change。而本项目绝大部分代码由 AI 辅助编写——
@@ -152,12 +256,14 @@ AI 对 GPUI 的训练数据极少且多是过时 API。这不是学习成本问�
 
 - [x] **1. 数据层** — goals / sources / snapshots
 - [x] **3. 手工打卡 + 每日快照 + 曲线**（内核闭环已跑通）
+- [x] **外壳** — Tauri 独立窗口，无本地服务
+- [ ] **8. 窗口内交互** — 建目标 / 打卡 / 分配。**目前窗口只读**，这些仍靠命令行，
+      所以新库打开时窗口会显示一段命令行指引。这是当前最扎眼的缺口。
 - [ ] **2. AI 对话产出判定规则** — 最不确定的一步，优先验证
 - [ ] **4. 对比视图**（本周 vs 上周、本月 vs 上月）
 - [ ] **5. git 适配器**（增量扫描）
 - [ ] **6. AI 标记**（项目级 + 起始提交）
 - [ ] **7. 每日报告 / 睡前提醒**
-- [ ] **8. 交互界面**（本地服务让「分配」可点）
 
 ---
 

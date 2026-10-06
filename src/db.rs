@@ -1,9 +1,11 @@
 //! SQLite 持久化层：连接、建表、CRUD。
 //!
-//! 单文件库，默认 `<项目>/data/baseline.db`。
+//! 单文件库，默认位置见 [`default_path`]。
 
 // 部分查询函数（如 `checkins_of`）是给界面与后续 git 适配器准备的，暂未接线。
 #![allow(dead_code)]
+
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -11,6 +13,24 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::model::{Checkin, Goal, Source, SourceKind};
 
 pub const SCHEMA_VERSION: i64 = 1;
+
+/// 默认数据库位置。
+///
+/// 顺序：`BASELINE_DB` 环境变量 → `%APPDATA%\Baseline\baseline.db` → `~/.baseline/baseline.db`。
+///
+/// **不放在 exe 旁边。** 安装到 Program Files 后那个目录对普通用户只读，
+/// 而数据库必须可写；打包分发时「程序在哪」和「数据在哪」本来就是两个问题。
+/// CLI 与桌面窗口共用这一个函数，避免两边各指一个库、各讲一个故事。
+pub fn default_path() -> PathBuf {
+    if let Some(p) = std::env::var_os("BASELINE_DB") {
+        return PathBuf::from(p);
+    }
+    let dir = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".baseline")))
+        .unwrap_or_else(|| PathBuf::from("."));
+    dir.join("Baseline").join("baseline.db")
+}
 
 /// 打开（必要时创建）数据库。父目录会自动创建。
 pub fn open(path: &std::path::Path) -> Result<Connection> {

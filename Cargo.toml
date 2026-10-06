@@ -16,6 +16,19 @@ clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 anyhow = "1"
 
+# 内核是 lib 而不是只藏在 bin 里：CLI 和桌面外壳（src-tauri）都调用同一份。
+# 判定规则、累积口径、快照冻结这些东西一旦有两份实现，两份就会开始不一致。
+[lib]
+name = "baseline"
+path = "src/lib.rs"
+
+[[bin]]
+name = "baseline"
+path = "src/main.rs"
+
+[workspace]
+members = ["src-tauri"]
+
 [profile.release]
 lto = true
 codegen-units = 1

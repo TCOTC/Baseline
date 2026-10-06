@@ -1,7 +1,9 @@
 //! 基线 / Baseline —— 和之前的你对比
 //!
-//! 阶段 A.1：CLI + SQLite + 静态 HTML。
-//! 不做 HTTP 服务、不做 GUI 外壳、不引图表库（见设计文档 §7.2 / §7.3）。
+//! 命令行界面。内核在 `lib.rs` 导出的那几个模块里，桌面窗口（`src-tauri`）用的是同一份。
+//!
+//! 这里做的是内核给不了的事：把「什么算推进它」这类判断讲成人话，
+//! 以及在缺规则、缺数据的时候直接拒绝，而不是默默画一条平线。
 
 use std::path::PathBuf;
 
@@ -9,12 +11,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use chrono::{Local, NaiveDate};
 
-mod db;
-mod metrics;
-mod model;
-mod render;
-
-use model::{PALETTE, SourceKind};
+use baseline::{db, metrics, render};
+use baseline::model::{PALETTE, SourceKind};
 
 #[derive(Parser)]
 #[command(
@@ -24,9 +22,9 @@ use model::{PALETTE, SourceKind};
     long_about = "为每个目标定义「什么算推进它」，把活动归属到目标，累加成一条可以对比过去的曲线。"
 )]
 struct Cli {
-    /// 数据库路径
-    #[arg(long, global = true, default_value = "data/baseline.db")]
-    db: PathBuf,
+    /// 数据库路径。默认 %APPDATA%\Baseline\baseline.db，与桌面窗口共用同一个库。
+    #[arg(long, global = true)]
+    db: Option<PathBuf>,
 
     #[command(subcommand)]
     cmd: Cmd,
@@ -130,14 +128,16 @@ enum SourceCmd {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let conn = db::open(&cli.db)?;
+    let db_path = cli.db.clone().unwrap_or_else(db::default_path);
+    let conn = db::open(&db_path)?;
     let now = Local::now();
     let today = now.date_naive();
     let now_s = now.format("%Y-%m-%d %H:%M:%S").to_string();
 
     match cli.cmd {
         Cmd::Init => {
-            println!("数据库就绪：{}", cli.db.display());
+            println!("数据库就绪：{}", db_path.display());
+            println!("（桌面窗口读的是同一个库）");
         }
 
         Cmd::Goal(GoalCmd::Add { title, why, color }) => {
@@ -329,7 +329,7 @@ fn main() -> Result<()> {
         Cmd::Render { out, open } => {
             // 渲染前顺手补快照，保证曲线是最新的。幂等。
             metrics::roll(&conn, today)?;
-            let html = render::render(&conn, today, &now_s)?;
+            let html = render::render(&conn, today, render::Chrome::File)?;
             if let Some(dir) = out.parent() {
                 std::fs::create_dir_all(dir).ok();
             }

@@ -1,7 +1,10 @@
-//! 静态 HTML 渲染。
+//! HTML 渲染。
 //!
-//! 阶段 A.1 不做本地服务：`baseline render` 直接吐一个自包含的 HTML 文件，
-//! 浏览器打开即可。交互（分配、打卡）暂时留在 CLI。
+//! 一份渲染成果同时供两条出口用：
+//! - Tauri 窗口（`src-tauri` 把这份 HTML 挂在自定义协议上，窗口每次加载即重渲染）
+//! - `baseline render` 落盘成自包含的单文件，方便在浏览器里看一眼或存档
+//!
+//! 交互（分配、打卡）暂时留在 CLI。
 //!
 //! 曲线按设计规范绘制：**阶梯不平滑**、零值不画线、破零点加高亮。
 
@@ -12,7 +15,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use chrono::{Datelike, NaiveDate, Weekday};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::Connection;
 
 use crate::db;
 use crate::metrics::{self, GoalSeries};
@@ -20,6 +23,88 @@ use crate::model::{Checkin, Goal};
 
 const CSS: &str = include_str!("../assets/view.css");
 
+/// 页面外壳。
+///
+/// 同一个渲染结果有两条出口，差别只在有没有窗口顶栏：
+/// **Tauri 窗口**要一条能拖拽、带窗口按钮的顶栏（系统没给边框）；
+/// **导出的单文件 HTML**在浏览器里看，浏览器自己有标签栏——
+/// 再画一条点了没反应的假顶栏，比没有更糟。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Chrome {
+    /// Tauri 窗口：自绘顶栏
+    Window,
+    /// 导出的单文件 HTML
+    File,
+}
+
+/// 窗口顶栏。拖动、双击最大化由 `data-tauri-drag-region` 接管（Tauri 注入的脚本），
+/// 三个按钮走 `window.__TAURI__`。
+///
+/// 图标是 Segoe Fluent Icons 的字符，不是画的 SVG——
+/// E921 最小化 / E922 最大化 / E923 还原 / E8BB 关闭，
+/// 就是 Windows 标题栏自己用的那四个字形。
+///
+/// 顶栏里没有产品名，也没有日期。它横跨整个窗口宽度，是窗口的边框而不是页面的头部。
+///
+/// 这是全项目唯一一处 JS，而且是窗口外壳而非产品逻辑——
+/// 界面本身仍然由 Rust 一次渲染成字符串，不留第二份模板。
+fn title_bar_html() -> &'static str {
+    r#"
+  <div class="bar" data-tauri-drag-region>
+    <div class="drag" data-tauri-drag-region></div>
+    <button type="button" class="wbtn" id="w-min" tabindex="-1" aria-label="最小化">&#xE921;</button>
+    <button type="button" class="wbtn" id="w-max" tabindex="-1" aria-label="最大化">&#xE922;</button>
+    <button type="button" class="wbtn close" id="w-close" tabindex="-1" aria-label="关闭">&#xE8BB;</button>
+  </div>"#
+}
+
+/// 顶栏按钮的接线。
+///
+/// `__TAURI__` 不存在时整段直接退出——这一页在浏览器里打开也不会报错，
+/// 只是按钮没反应（而那种情况下本来就不该有顶栏）。
+///
+/// 所有失败都会 POST 到 `/__jslog`，由外壳写进 `desktop.log`。
+/// 窗口没有系统边框也就没有开发工具，界面上的异常不主动送出来就等于不存在。
+const TITLE_BAR_JS: &str = r#"
+<script>
+(function () {
+  function report(what, e) {
+    var msg = what + ': ' + ((e && (e.stack || e.message)) || e);
+    try { fetch('/__jslog', { method: 'POST', body: msg, keepalive: true }); } catch (_) {}
+  }
+  window.addEventListener('error', function (e) { report('window.onerror', e.message); });
+  window.addEventListener('unhandledrejection', function (e) { report('unhandled', e.reason); });
+  // 每次加载报一行。用来区分「窗口起来了」和「窗口起来了但页面是空的」——
+  // 这两种情况从外面看一模一样，处置却完全相反。
+  report('page', document.querySelectorAll('.card').length + ' cards, '
+    + document.querySelectorAll('.entry').length + ' entries');
+
+  var T = window.__TAURI__;
+  if (!T || !T.window) { report('no __TAURI__', 'withGlobalTauri 没生效？'); return; }
+  var w = T.window.getCurrentWindow();
+  var max = document.getElementById('w-max');
+
+  // 最大化之后那个方框必须变成「还原」，否则它就在骗人。
+  function paint(on) { max.textContent = on ? '\uE923' : '\uE922'; }
+  function sync() { w.isMaximized().then(paint).catch(function (e) { report('isMaximized', e); }); }
+
+  document.getElementById('w-min').onclick = function () {
+    w.minimize().catch(function (e) { report('minimize', e); });
+  };
+  // 用 maximize/unmaximize 而不是 toggleMaximize：图标要跟着状态走，
+  // 而状态本来就得查一次，顺带把「查」和「改」绑在同一次判断里。
+  max.onclick = function () {
+    w.isMaximized().then(function (on) {
+      return on ? w.unmaximize() : w.maximize();
+    }).catch(function (e) { report('maximize', e); });
+  };
+  document.getElementById('w-close').onclick = function () {
+    w.close().catch(function (e) { report('close', e); });
+  };
+  w.onResized(sync);
+  sync();
+})();
+</script>"#;
 pub fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -264,44 +349,16 @@ fn timeline_html(conn: &Connection, goals: &HashMap<i64, Goal>, today: NaiveDate
     Ok(out)
 }
 
-// ------------------------------------------------------------ meta 小工具
-
-fn get_meta(conn: &Connection, k: &str) -> Result<Option<String>> {
-    Ok(conn
-        .query_row("SELECT v FROM meta WHERE k=?1", params![k], |r| r.get(0))
-        .optional()?)
-}
-
-fn set_meta(conn: &Connection, k: &str, v: &str) -> Result<()> {
-    conn.execute(
-        "INSERT INTO meta(k, v) VALUES (?1, ?2)
-         ON CONFLICT(k) DO UPDATE SET v = excluded.v",
-        params![k, v],
-    )?;
-    Ok(())
-}
-
 // ------------------------------------------------------------ 主入口
 
-pub fn render(conn: &Connection, today: NaiveDate, now: &str) -> Result<String> {
+pub fn render(conn: &Connection, today: NaiveDate, chrome: Chrome) -> Result<String> {
     let goals = db::goal_list(conn, false)?;
     let goal_map: HashMap<i64, Goal> = goals.iter().map(|g| (g.id, g.clone())).collect();
 
-    // 距上次查看
-    let prev_view = get_meta(conn, "last_viewed_at")?;
-    let since = prev_view
-        .as_deref()
-        .and_then(|s| NaiveDate::parse_from_str(&s[..10.min(s.len())], "%Y-%m-%d").ok())
-        .map(|d| (today - d).num_days())
-        .filter(|n| *n > 0);
-    set_meta(conn, "last_viewed_at", now)?;
-
     // 左栏
     let mut cards = String::new();
-    let mut total_delta = 0.0f64;
     for g in &goals {
         let s = metrics::series(conn, g.id, today)?;
-        total_delta += s.delta_week;
         cards.push_str(&card_html(g, &s, &rule_line(conn, g)?));
     }
     // 没有判定规则的目标要显式警告 —— 它们的曲线永远不会动。
@@ -310,22 +367,17 @@ pub fn render(conn: &Connection, today: NaiveDate, now: &str) -> Result<String> 
         .map(|g| g.title)
         .collect();
 
-    let head_meta = match since {
-        Some(n) => format!("{today} · {} · 距上次查看 {n} 天", weekday_cn(today)),
-        None => format!("{today} · {}", weekday_cn(today)),
-    };
-
     let body = if goals.is_empty() {
         r#"
     <div class="empty">
       还没有任何目标。<br><br>
-      先建一个，并给它写清「什么算推进它」：<br><br>
+      现在只能用命令行建。建目标时要一并写清「什么算推进它」——<br>
+      没有判定规则的目标，曲线永远不会动。<br><br>
       <code>baseline goal add "计算机基础" --why "基础知识匮乏" --color blue</code><br>
       <code>baseline source add "计算机基础" --kind manual_checkin --rationale "读完一章或做完一章题算一次"</code><br><br>
-      然后打卡、写快照、看曲线：<br><br>
-      <code>baseline checkin "计算机基础" --note "读完 CSAPP 第 3 章"</code><br>
-      <code>baseline tick</code><br>
-      <code>baseline render</code>
+      然后打卡：<br><br>
+      <code>baseline checkin "计算机基础" --note "读完 CSAPP 第 3 章"</code><br><br>
+      建完按 <b>F5</b> 刷新这个窗口。
     </div>"#
             .to_string()
     } else {
@@ -350,33 +402,54 @@ pub fn render(conn: &Connection, today: NaiveDate, now: &str) -> Result<String> 
         )
     };
 
-    let total_delta_s = if total_delta > 0.0 {
-        format!("+{}", num(total_delta))
-    } else {
-        num(total_delta)
+    let (bar, js, title) = match chrome {
+        // 无边框窗口的标题栏、任务栏、Alt-Tab 都跟着文档标题走。
+        // 那里只该出现产品名——日期是刚从页面上删掉的东西，不该从任务栏溜回来。
+        Chrome::Window => (title_bar_html(), TITLE_BAR_JS, "基线".to_string()),
+        // 导出的文件在浏览器里是一个标签页，带日期才分得清是哪天导的。
+        Chrome::File => ("", "", format!("基线 · {today}")),
     };
 
     Ok(format!(
         r#"<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>基线 · {today}</title>
-<style>{css}</style></head><body>
+<title>{title}</title>
+<style>{css}</style></head><body>{bar}
 <div class="wrap">
-  <header>
-    <div class="brand"><i></i>基线</div>
-    <div class="meta">{head_meta} · 本周总位移 {total_delta_s}</div>
-  </header>
 {body}
-  <footer>
-    数据来源：本机 SQLite · 快照写入后不再改写（历史不会因规则改动而被重画）<br>
-    曲线为阶梯线，不做插值 · 缺日沿用前一个已知值 · 零值不画线
-  </footer>
-</div></body></html>"#,
-        today = today,
+</div>{js}</body></html>"#,
+        title = title,
         css = CSS,
-        head_meta = esc(&head_meta),
-        total_delta_s = total_delta_s,
+        bar = bar,
         body = body,
+        js = js,
     ))
+}
+
+/// 出错时给人看的一页。
+///
+/// 窗口外壳拿不到数据时最怕的就是一片空白——那和「今天什么都没发生」长得一模一样，
+/// 而这两件事的处置完全相反。所以这里宁可难看，也要把断在哪一步写清楚。
+///
+/// 顶栏照给。窗口没有系统边框，这一页要是没有顶栏，就没法拖动也没法关掉。
+pub fn error_page(message: &str) -> String {
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>基线</title>
+<style>{css}</style></head><body>{bar}
+<div class="wrap">
+  <div class="err">
+    <h1>打不开数据</h1>
+    <p>窗口起来了，但读不到数据库。原始错误：</p>
+    <pre>{message}</pre>
+  </div>
+</div>{js}</body></html>"#,
+        css = CSS,
+        bar = title_bar_html(),
+        js = TITLE_BAR_JS,
+        message = esc(message),
+    )
 }
