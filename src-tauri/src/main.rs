@@ -33,6 +33,8 @@ use tauri::{Manager as _, WebviewUrl, WebviewWindowBuilder};
 use baseline::model::SourceKind;
 use baseline::{ai, db, metrics, render};
 
+mod debug;
+
 /// 自定义协议名。Windows 上落在 `http://<名字>.localhost/`。
 const SCHEME: &str = "baseline";
 
@@ -48,6 +50,10 @@ fn main() {
 
     // 协议处理函数按请求现渲染，因此它需要自己拿到库的路径。
     let served = db_path.clone();
+    // 调试桥的开关。**默认关**：它能在页面里执行任意 JS，
+    // 等于把窗口交给本机上的任何进程控制。见 debug.rs 顶部。
+    let want_debug = has_flag("--debug");
+    let debug_db = db_path.clone();
     tauri::Builder::default()
         .manage(AppDb(db_path.clone()))
         .invoke_handler(tauri::generate_handler![
@@ -100,7 +106,7 @@ fn main() {
                 .body(body.into_bytes())
                 .expect("构造 HTTP 响应失败")
         })
-        .setup(|app| {
+        .setup(move |app| {
             // 窗口在代码里建而不是写在 tauri.conf.json 里：配置里声明的窗口会在 setup
             // 之前就被创建，那样就没有机会按运行时的数据库路径决定地址了。
             WebviewWindowBuilder::new(
@@ -122,6 +128,10 @@ fn main() {
             .build()?;
 
             build_tray(app)?;
+
+            if want_debug {
+                debug::start(app.handle().clone(), debug_db.clone());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -454,7 +464,7 @@ fn test_ai(state: tauri::State<'_, AppDb>) -> Result<String, String> {
 /// 后两级和 CLI 共用 `db::default_path`，不各写一份——两边指到不同的库，
 /// 就会出现「命令行里明明有数据，窗口里是空的」。
 ///
-/// 故意不引 clap：外壳总共就这一个参数，为它拉一整套解析器不划算。
+/// 故意不引 clap：外壳总共就这两个开关，为它们拉一整套解析器不划算。
 fn resolve_db_path() -> PathBuf {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -467,6 +477,15 @@ fn resolve_db_path() -> PathBuf {
         }
     }
     db::default_path()
+}
+
+/// 命令行里有没有这个开关（`--flag` 或 `--flag=1` 都算）。
+fn has_flag(name: &str) -> bool {
+    std::env::args().skip(1).any(|a| {
+        a == name
+            || a.strip_prefix(name)
+                .is_some_and(|rest| rest.starts_with('=') && !rest.contains('0'))
+    })
 }
 
 /// 渲染当前这一屏。失败时返回一个能读的错误页，而不是空白。

@@ -1,5 +1,8 @@
 # 统一行尾：源码 LF，PowerShell 脚本 CRLF（Windows PowerShell 5.1 对 LF 脚本不友好）
 * text=auto eol=lf
 *.ps1 text eol=crlf
+# .psm1 原来漏了：AGENTS.md 写着「脚本 CRLF，由 .gitattributes 保证」，
+# 而模块文件并不在那条规则里——文档承诺了一件没做到的事。
+*.psm1 text eol=crlf
 *.png binary
 *.db binary

@@ -21,3 +21,5 @@ anyhow = "1"
 chrono = "0.4"
 # 命令的返回值要序列化成 JSON 交给界面（例如「记完了，还有哪几个目标要补判」）。
 serde = { version = "1", features = ["derive"] }
+# 调试桥要拼 JSON（debug.rs）。它本来就在 tauri 的依赖树里，不是新拉的东西。
+serde_json = "1"
