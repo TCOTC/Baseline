@@ -93,16 +93,44 @@ pub struct Source {
     pub rationale: String,
 }
 
+impl Source {
+    /// 这条规则**在界面上叫什么**。
+    ///
+    /// 优先 `target`（那是「算在什么上」），没有就退回 `rationale`
+    /// （那句「什么算推进它」才是这条规则的核心），都没有才说实话。
+    ///
+    /// **只有这一处**。卡片底部、流水行、CLI 的拒绝语都调它——
+    /// 三处各写一遍的话，「这条记录归到了哪条规则」和「卡片上印着哪句话」
+    /// 迟早会变成两句不同的话，而用户只会看到「对不上」。
+    pub fn summary(&self) -> String {
+        if !self.target.trim().is_empty() {
+            self.target.trim().to_string()
+        } else if !self.rationale.trim().is_empty() {
+            self.rationale.trim().to_string()
+        } else {
+            "没写说明".to_string()
+        }
+    }
+}
+
 /// 记录挂到某个目标上的那一条关联。
 #[derive(Debug, Clone)]
 pub struct CheckinLink {
     pub goal_id: i64,
-    /// 这条记录**在这个目标下算不算数**——也就是它有没有归到这个目标的一条规则上。
+    /// 归到**哪一条**规则。`None` 就是「挂上来了，但不进这条曲线」。
     ///
-    /// 界面直接用它说话，所以它必须来自归属本身（`checkin_goals.source_id`），
+    /// 界面直接用它说话（流水上那句「·不计入」、详情页的「没归到规则」），
+    /// 所以它必须来自归属本身（`checkin_goals.source_id`），
     /// 不能由「这个目标有没有手工规则」推出来：那两件事在删掉一条规则之后就会分叉，
     /// 而分叉的表现是流水上写着「计入」、曲线里却没有它。
-    pub counts: bool,
+    pub source_id: Option<i64>,
+}
+
+impl CheckinLink {
+    /// 这条记录在这个目标下算不算数。
+    pub fn counts(&self) -> bool {
+        self.source_id.is_some()
+    }
 }
 
 /// 一条推进记录。
@@ -135,4 +163,32 @@ pub struct Snapshot {
     pub goal_id: i64,
     pub day: String,
     pub cumulative: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn src(target: &str, rationale: &str) -> Source {
+        Source {
+            id: 1,
+            goal_id: 1,
+            kind: SourceKind::ManualCheckin,
+            target: target.to_string(),
+            params: "{}".to_string(),
+            rationale: rationale.to_string(),
+        }
+    }
+
+    /// 规则叫什么只有这一处定义：卡片底部、流水行、CLI 的拒绝语都读它。
+    /// 三处各写一遍的话，「这条记录归到了哪条规则」和「卡片上印着哪句话」
+    /// 迟早变成两句不同的话——而用户只看得到「对不上」。
+    #[test]
+    fn 规则的名字优先取_target_再退回_rationale() {
+        assert_eq!(src("做题", "做完一章题算一次").summary(), "做题");
+        assert_eq!(src("", "读完一章算一次").summary(), "读完一章算一次");
+        assert_eq!(src("  ", "  读完一章  ").summary(), "读完一章");
+        // 都没写就说实话，不编一个出来。
+        assert_eq!(src("", "").summary(), "没写说明");
+    }
 }

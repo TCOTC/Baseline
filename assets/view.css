@@ -241,30 +241,34 @@ body{
 .composer .gopt em{margin-left:auto; padding-left:10px; font-style:normal;
   font-size:11px; color:var(--tx-3); font-weight:400}
 
-/* 「这条记录算哪条规则？」——两条以上规则都能收它的时候才出现。
-   和 gmenu 一样往上弹、一样是绝对值定位：它出现的位置不该把输入框往下挤。 */
-.composer .rpick{
-  position:absolute; left:calc(var(--pad) + var(--outer)); bottom:100%;
-  margin-bottom:6px; min-width:230px; max-width:420px;
-  background:var(--sf); border:1px solid var(--cbd); border-radius:12px;
-  padding:6px; box-shadow:0 8px 24px rgba(0,0,0,.09); z-index:20;
-  display:flex; flex-direction:column; gap:1px;
+/* 规则气泡：在输入区**上面**、左对齐，和下面那排目标气泡分成两层。
+   上面是「这条记录算在哪条规则上」，下面是「它推进了哪些目标」。
+   不做浮层——浮层会盖住流水，而这件事要在打字的时候一直看得见。
+
+   形状是圆角矩形（不是下面那种胶囊）：两种气泡长得一样的话，
+   扫一眼分不出哪排是目标、哪排是规则。 */
+.composer .rules{
+  display:flex; align-items:center; flex-wrap:wrap; gap:6px;
+  padding:2px 2px 8px;
 }
-.composer .rpick[hidden]{display:none}
-/* 「两条规则都能收它」但没指认时的闪一下。提示不能只写在 placeholder 上——
-   输入框里有字的时候那句提示看不见，而这件事恰恰总在按下回车那一刻遇到。 */
-.composer .rpick.broke{border-color:var(--rose)}
-.composer .rpick-h{padding:6px 9px 8px; font-size:11.5px; color:var(--ctx);
-  border-bottom:1px solid var(--bd); margin-bottom:4px}
-.composer .rpick-h span{display:block; color:var(--tx-3); opacity:.8}
-.composer .rpick-g{padding:7px 9px 3px; font-size:11px; color:var(--tx-3)}
-.composer .ropt{
-  display:block; width:100%; text-align:left;
-  background:none; border:0; border-radius:8px; padding:7px 9px;
-  font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default;
+.composer .rules[hidden]{display:none}
+.composer .rules-h{font-size:11.5px; color:var(--tx-3); flex:none; margin-right:2px}
+.composer .rules-list{display:flex; align-items:center; flex-wrap:wrap; gap:6px}
+/* 有多个目标时才写目标名，否则它就是噪音——下面那排目标气泡里已经亮着它了。 */
+.composer .rgroup{font-size:11px; color:var(--ctx); font-weight:650; flex:none;
+  margin-left:4px}
+.composer .rules-list > .rgroup:first-child{margin-left:0}
+.composer .rchip{
+  background:none; border:1px solid var(--bd-2); border-radius:8px;
+  padding:4px 9px; font:inherit; font-size:12px; color:var(--tx-2);
+  cursor:default; max-width:260px; overflow:hidden; white-space:nowrap;
+  text-overflow:ellipsis;
 }
-.composer .ropt:hover{background:var(--sf-2)}
-.composer .ropt.on{color:var(--ctx); font-weight:650; background:var(--cbg)}
+.composer .rchip:hover{border-color:var(--tx-3); color:var(--tx)}
+.composer .rchip.on{background:var(--cbg); border-color:var(--cbd); color:var(--ctx);
+  font-weight:650}
+/* 「两条规则都能收它」但没指认时亮着，选了一条就灭。 */
+.composer .rules.broke .rchip{border-color:var(--rose); color:var(--rose-tx)}
 
 .composer .send{
   flex:none;
@@ -447,7 +451,8 @@ a.card:focus-visible{outline:2px solid var(--c);outline-offset:2px}
 .day + .entry .rail::before{top:-6px}
 .body .act{font-size:13.5px;font-weight:600;letter-spacing:-.005em}
 .entry.unlinked .act{font-weight:500;color:var(--tx-2)}
-.body .sub{font-size:11.5px;color:var(--tx-3);margin-top:1px}
+.body .sub{font-size:11.5px;color:var(--tx-3);margin-top:1px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .tags{display:flex;align-items:center;gap:8px;padding-top:2px}
 .chip{font-size:11px;font-weight:650;padding:3px 9px;border-radius:99px;
   background:var(--cbg);color:var(--ctx);border:1px solid var(--cbd);white-space:nowrap}

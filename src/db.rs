@@ -473,7 +473,26 @@ pub fn sources_of(conn: &Connection, goal_id: i64) -> Result<Vec<Source>> {
         "SELECT id, goal_id, kind, target, params, rationale FROM sources
          WHERE goal_id=?1 ORDER BY id",
     )?;
-    let rows = stmt.query_map(params![goal_id], |r| {
+    collect_sources(&mut stmt, params![goal_id])
+}
+
+/// 全部规则，**含已归档目标的**。
+///
+/// 流水行要说清「这条记录算在哪条规则上」，而归档目标的记录仍然留在流水里
+/// （归档只让它从列表消失，曲线和记录都留着）。按活跃目标去查会正好漏掉它们，
+/// 表现是那些记录底下忽然少了一句规则名。
+pub fn sources_all(conn: &Connection) -> Result<Vec<Source>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, goal_id, kind, target, params, rationale FROM sources ORDER BY id",
+    )?;
+    collect_sources(&mut stmt, [])
+}
+
+fn collect_sources(
+    stmt: &mut rusqlite::Statement<'_>,
+    args: impl rusqlite::Params,
+) -> Result<Vec<Source>> {
+    let rows = stmt.query_map(args, |r| {
         let kind: String = r.get(2)?;
         Ok((
             r.get::<_, i64>(0)?,
@@ -564,7 +583,7 @@ fn links_by_checkin(conn: &Connection) -> Result<std::collections::HashMap<i64, 
             r.get::<_, i64>(0)?,
             CheckinLink {
                 goal_id: r.get(1)?,
-                counts: r.get::<_, Option<i64>>(2)?.is_some(),
+                source_id: r.get(2)?,
             },
         ))
     })?;
@@ -732,16 +751,7 @@ pub fn resolve_links(
 fn ambiguous_msg(goal_title: &str, cands: &[Source]) -> String {
     let list: Vec<String> = cands
         .iter()
-        .map(|s| {
-            let what = if !s.rationale.trim().is_empty() {
-                s.rationale.trim()
-            } else if !s.target.trim().is_empty() {
-                s.target.trim()
-            } else {
-                "没写说明"
-            };
-            format!("#{} {}", s.id, what)
-        })
+        .map(|s| format!("#{} {}", s.id, s.summary()))
         .collect();
     format!(
         "「{goal_title}」下有 {} 条规则都能收这条记录：{}。它算哪一条得你来定——不替你猜。",

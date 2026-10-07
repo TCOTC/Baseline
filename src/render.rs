@@ -49,32 +49,32 @@ fn composer_html(conn: &Connection, goals: &[Goal]) -> Result<String> {
     }
     let manual = manual_goals(conn, goals)?;
 
-    // 每个目标下能收手工记录的规则，交给界面判断「要不要问一句」。
+    // 每个目标下能收手工记录的规则，连**会自动归属的那一条**一起交给界面。
     //
-    // **这只是把候选列出来给人点，不是第二套判定。** 归属仍然由内核的
-    // `db::resolve_links` 定：唯一就自动归，两条以上而没人指认就拒绝——
-    // 界面上这个选择器只是把那次拒绝提前成一次询问。
+    // **这不是第二套判定。** 归属仍然由内核的 `db::resolve_links` 定；
+    // `auto` 就是 `db::pick_source` 的答案，界面把它画成已经选中的那颗气泡——
+    // 于是「这条记录会算在哪条规则上」在按下回车之前就看得见，
+    // 而不是等记完了去数曲线为什么不动。
     let mut rules_map = serde_json::Map::new();
     for g in goals {
-        let list: Vec<serde_json::Value> = db::manual_sources_of(conn, g.id)?
-            .iter()
-            .map(|s| {
-                let what = if !s.rationale.trim().is_empty() {
-                    s.rationale.trim().to_string()
-                } else if !s.target.trim().is_empty() {
-                    s.target.trim().to_string()
-                } else {
-                    "没写说明".to_string()
-                };
-                json!({ "id": s.id, "what": what })
-            })
-            .collect();
-        if !list.is_empty() {
-            rules_map.insert(
-                g.id.to_string(),
-                json!({ "title": g.title, "sources": list }),
-            );
+        let srcs = db::manual_sources_of(conn, g.id)?;
+        if srcs.is_empty() {
+            continue;
         }
+        let list: Vec<serde_json::Value> = srcs
+            .iter()
+            .map(|s| json!({ "id": s.id, "what": s.summary() }))
+            .collect();
+        let auto = db::pick_source(conn, g.id)?;
+        rules_map.insert(
+            g.id.to_string(),
+            json!({
+                "title": g.title,
+                "color": g.color,
+                "auto": auto,
+                "sources": list,
+            }),
+        );
     }
     let rules_json = serde_json::Value::Object(rules_map)
         .to_string()
@@ -119,11 +119,14 @@ fn composer_html(conn: &Connection, goals: &[Goal]) -> Result<String> {
           <div class="gmenu-h">这条记录推进了哪些目标？<span>可以多选，也可以一个都不选</span></div>
           {menu}
         </div>
-        <div class="rpick" id="rpick" hidden>
-          <div class="rpick-h">这条记录算哪条规则？<span>有两条都能收它——它算哪一条只有你知道</span></div>
-          <div class="rpick-list" id="rpick-list"></div>
-        </div>
         <div class="box">
+          <!-- 规则气泡在输入区**上面**、左对齐，和下面那排目标气泡分成两层：
+               上面是「这条记录算在哪条规则上」，下面是「它推进了哪些目标」。
+               不弹浮层——浮层会盖住流水，而这件事需要在打字的时候一直看得见。 -->
+          <div class="rules" id="rules" hidden>
+            <div class="rules-h">算哪条规则？</div>
+            <div class="rules-list" id="rules-list"></div>
+          </div>
           <textarea id="composer-input" rows="2" maxlength="500"
                     placeholder="刚做了什么？" aria-label="记一条"></textarea>
           <div class="crow">
@@ -365,22 +368,18 @@ fn rule_line(conn: &Connection, g: &Goal) -> Result<String> {
     let parts: Vec<String> = srcs
         .iter()
         .map(|s| {
-            let label = s.kind.label();
-            // 卡片底部优先显示 target；没有 target 就显示 rationale——
-            // 那句「什么算推进它」才是这条规则的核心，不该被藏起来。
-            let detail = if !s.target.is_empty() {
-                format!(" · {}", esc(&s.target))
-            } else if !s.rationale.trim().is_empty() {
-                format!(" · {}", esc(s.rationale.trim()))
-            } else {
+            // 规则叫什么由 model::Source::summary 一处定义（卡片底部、流水行、CLI 拒绝语共用）。
+            let detail = if s.target.trim().is_empty() && s.rationale.trim().is_empty() {
                 String::new()
+            } else {
+                format!(" · {}", esc(&s.summary()))
             };
             let note = if s.kind.implemented() {
                 String::new()
             } else {
                 "（未接入）".to_string()
             };
-            format!("{label}{detail}{note}")
+            format!("{}{detail}{note}", s.kind.label())
         })
         .collect();
     Ok(parts.join(" + "))
@@ -402,8 +401,21 @@ fn day_label(day: &NaiveDate, today: NaiveDate) -> (String, Option<String>) {
 ///
 /// 顺序是**下新上旧**：像一条流水，最新的一条贴着底部输入框。
 /// 行的结构由 `assets/view.js` 拼，class 仍然来自 `view.css`。
-fn timeline_json(conn: &Connection, goals: &HashMap<i64, Goal>, today: NaiveDate) -> Result<String> {
-    Ok(rows_json(&db::checkins_all(conn)?, goals, today))
+fn timeline_json(
+    conn: &Connection,
+    goals: &HashMap<i64, Goal>,
+    sources: &HashMap<i64, crate::model::Source>,
+    today: NaiveDate,
+) -> Result<String> {
+    Ok(rows_json(&db::checkins_all(conn)?, goals, sources, today))
+}
+
+/// 全部规则，按 id。流水行要说出「这条记录算在哪条规则上」。
+fn source_map(conn: &Connection) -> Result<HashMap<i64, crate::model::Source>> {
+    Ok(db::sources_all(conn)?
+        .into_iter()
+        .map(|s| (s.id, s))
+        .collect())
 }
 
 /// 哪些目标的规则接受手工记录。
@@ -430,6 +442,7 @@ fn manual_goals(conn: &Connection, goals: &[Goal]) -> Result<std::collections::H
 fn rows_json(
     checkins: &[crate::model::Checkin],
     goals: &HashMap<i64, Goal>,
+    sources: &HashMap<i64, crate::model::Source>,
     today: NaiveDate,
 ) -> String {
     let mut rows: Vec<serde_json::Value> = Vec::new();
@@ -462,7 +475,7 @@ fn rows_json(
                 Some(g) => json!({
                     "title": g.title,
                     "color": g.color,
-                    "counts": l.counts,
+                    "counts": l.counts(),
                 }),
                 None => json!({ "title": "（已删除）", "color": "none", "counts": false }),
             })
@@ -472,8 +485,28 @@ fn rows_json(
         } else {
             c.note.trim().to_string()
         };
+
+        // 那句「手工打卡」下面要写出**这条记录算在哪条规则上**。
+        //
+        // 在这之前，规则只印在卡片底部——那是「这个目标怎么算」，
+        // 而一条记录究竟归到了哪一句，界面上没有任何地方说。于是「我记了它却不涨」
+        // 只能靠猜。归属现在就在手上（`links[].source_id`），说出来是零成本的。
+        let mut rules: Vec<String> = Vec::new();
+        for l in &c.links {
+            if let Some(sid) = l.source_id {
+                if let Some(s) = sources.get(&sid) {
+                    rules.push(s.summary());
+                }
+            }
+        }
+        let sub = if rules.is_empty() {
+            "手工打卡".to_string()
+        } else {
+            format!("手工打卡 • {}", rules.join("、"))
+        };
+
         rows.push(json!({
-            "k": "e", "time": c.time, "text": text, "sub": "手工打卡",
+            "k": "e", "time": c.time, "text": text, "sub": sub,
             "goals": chips,
         }));
     }
@@ -707,6 +740,7 @@ pub fn render(
 ) -> Result<String> {
     let goals = db::goal_list(conn, false)?;
     let goal_map: HashMap<i64, Goal> = goals.iter().map(|g| (g.id, g.clone())).collect();
+    let source_map = source_map(conn)?;
 
     // 目标不存在（链接过期、被删了）就退回主视图，不要给一页空白。
     let focused = match goal {
@@ -731,7 +765,7 @@ pub fn render(
     let (body, log_json) = if let Some(g) = &focused {
         (
             detail_body(conn, today, g)?,
-            rows_json(&db::checkins_of(conn, g.id)?, &goal_map, today),
+            rows_json(&db::checkins_of(conn, g.id)?, &goal_map, &source_map, today),
         )
     } else {
         let mut cards = String::new();
@@ -778,7 +812,7 @@ pub fn render(
                 addgoal = addgoal,
                 composer = composer,
             ),
-            timeline_json(conn, &goal_map, today)?,
+            timeline_json(conn, &goal_map, &source_map, today)?,
         )
     };
 

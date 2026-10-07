@@ -492,7 +492,7 @@ mod tests {
         record(&conn, &[g], &[(g, s1)], TODAY, "复习第 3 课");
 
         let counts_of = |conn: &Connection| -> bool {
-            db::checkins_all(conn).unwrap()[0].links[0].counts
+            db::checkins_all(conn).unwrap()[0].links[0].counts()
         };
         assert!(counts_of(&conn), "归到了规则 #1，就是计入");
 

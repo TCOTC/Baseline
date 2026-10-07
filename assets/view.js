@@ -110,7 +110,9 @@
       '<div class="rail"><span class="dot ' + esc((r.goals[0] || {}).color || 'none') +
       '"></span></div>' +
       '<div class="body"><div class="act" title="' + esc(r.text) + '">' + esc(r.text) + '</div>' +
-      '<div class="sub">' + esc(r.sub) + '</div></div>' +
+      // 规则名可能很长，而行高是定死的（虚拟滚动靠它算偏移），所以这里只显示一行、
+      // 超长省略，全文挂在 title 上——和上面那句备注同一个规矩。
+      '<div class="sub" title="' + esc(r.sub) + '">' + esc(r.sub) + '</div></div>' +
       '<div class="tags">' + tags + '</div></div>';
   }
 
@@ -197,16 +199,16 @@
     var chips = $('gchips');
     var more = $('gmore');
     var gmenu = $('gmenu');
-    var rpick = $('rpick');
-    var rlist = $('rpick-list');
+    var rules = $('rules');
+    var rlist = $('rules-list');
 
-    // 每个目标下能收手工记录的规则，由 Rust 列好（见 render::composer_html）。
-    // **这里只负责问，不负责判**：归属由内核定，唯一就自动归，
-    // 两条以上而没人指认就拒绝。选择器只是把那次拒绝提前成一次询问。
-    var rules = {};
+    // 每个目标下能收手工记录的规则，由 Rust 连**会自动归属的那一条**一起列好
+    // （见 render::composer_html）。`auto` 就是内核 db::pick_source 的答案。
+    // **这里只负责画和问，不负责判**：归属仍然由内核定。
+    var ruleMap = {};
     try {
       var rulesEl = $('composer-rules');
-      rules = rulesEl ? JSON.parse(rulesEl.textContent) : {};
+      ruleMap = rulesEl ? JSON.parse(rulesEl.textContent) : {};
     } catch (e) {
       report('composer-rules', e);
     }
@@ -232,54 +234,59 @@
     function ids() { return Object.keys(chosen); }
 
     // 人点过的「这条记录算哪条规则」，键是目标 id。
-    // 只有「一个目标下两条以上规则都能收它」时才需要它——一条的情况内核会自己归。
+    //
+    // 选中目标之后，每个目标都会先按内核算出的 `auto` 预置一条——
+    // **能唯一确定的那条直接就是选中的状态**，于是它在按下回车前就看得见。
+    // 两条以上时 `auto` 是 null，气泡全是空的，必须点一个才发得出去。
     var picked = {};
 
-    // 选中的目标里，哪些还没有指认规则。有的话不能提交：
-    // 提交了内核也会拒绝，不如在这里先说清楚。
+    // 还没指认规则的选中目标。null 表示都指认好了。
     function missingPick() {
       var out = null;
       ids().forEach(function (gid) {
-        var r = rules[gid];
+        var r = ruleMap[gid];
         if (r && r.sources.length > 1 && !picked[gid]) out = out || gid;
       });
       return out;
     }
 
-    // 把需要指认的目标和它们的规则画出来。一条规则的目标不出现在这里——
-    // 只有一个选项的选择器不是选择器，是噪音。
+    // 把选中目标下的规则画成一排气泡，左对齐，就在输入区上面。
     function refreshRules() {
-      if (!rpick || !rlist) return;
+      if (!rules || !rlist) return;
 
-      // 取消勾选的目标，之前替它选的规则跟着作废。
-      // 留着会让「我已经取消了它」和「它还在算」同时成立。
+      // 取消勾选的目标，它的规则气泡跟着消失。
       Object.keys(picked).forEach(function (gid) {
         if (!chosen[gid]) delete picked[gid];
       });
 
       var groups = [];
       ids().forEach(function (gid) {
-        var r = rules[gid];
-        if (r && r.sources.length > 1) groups.push({ goal: gid, title: r.title, list: r.sources });
+        var r = ruleMap[gid];
+        if (!r || !r.sources.length) return;
+        // 内核说这条唯一可归属 —— 直接预置成选中，不用人再点一下。
+        if (r.auto && !picked[gid]) picked[gid] = r.auto;
+        groups.push({ goal: gid, title: r.title, color: r.color, list: r.sources });
       });
 
-      rpick.hidden = groups.length === 0;
+      rules.hidden = groups.length === 0;
+      // 只有一个目标时不必写它的名字：下面那排目标气泡里已经亮着它了。
+      rules.classList.toggle('many', groups.length > 1);
       rlist.innerHTML = '';
       groups.forEach(function (g) {
         if (groups.length > 1) {
-          var h = document.createElement('div');
-          h.className = 'rpick-g';
+          var h = document.createElement('span');
+          h.className = 'rgroup ' + g.color;
           h.textContent = g.title;
           rlist.appendChild(h);
         }
         g.list.forEach(function (s) {
           var b = document.createElement('button');
           b.type = 'button';
-          b.className = 'ropt' + (picked[g.goal] === s.id ? ' on' : '');
+          b.className = 'rchip ' + g.color + (picked[g.goal] === s.id ? ' on' : '');
           b.dataset.goal = g.goal;
           b.dataset.src = s.id;
           b.textContent = s.what;
-          b.title = '规则 #' + s.id;
+          b.title = '规则 #' + s.id + '：' + s.what;
           rlist.appendChild(b);
         });
       });
@@ -333,13 +340,14 @@
     }
     if (rlist) {
       rlist.addEventListener('click', function (ev) {
-        var b = ev.target.closest('.ropt');
+        var b = ev.target.closest('.rchip');
         if (!b) return;
         var g = b.dataset.goal, s = Number(b.dataset.src);
-        // 再点一下取消：选错了要能退回去，不然只能重开窗口。
+        // 一个目标下只能算一条规则，所以这里不是多选：点另一条就换过去。
+        // 再点当前这条 = 取消（「这条不算它」），留一条退路。
         if (picked[g] === s) delete picked[g]; else picked[g] = s;
         refreshRules();
-        light(rpick, !!missingPick()); // 指认过了就不再拦着
+        light(rules, !!missingPick()); // 指认过了就不再拦着
         input.focus();
       });
     }
@@ -394,7 +402,7 @@
       // 等于「点完了才知道」，而这条界线本来就该在点之前说。
       if (missingPick()) {
         refreshRules();
-        light(rpick); // 要动手的是这个选择器，让它自己说话
+        light(rules); // 要动手的是这排气泡，让它自己说话
         hint('这条记录算哪条规则？先在上面选一条');
         return;
       }
