@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::model::{Checkin, Goal, Source, SourceKind};
+use crate::model::{Checkin, CheckinLink, Goal, Source, SourceKind};
 
 pub const SCHEMA_VERSION: i64 = 1;
 
@@ -43,6 +43,19 @@ pub fn open(path: &std::path::Path) -> Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "synchronous", "FULL")?;
+    migrate(&conn)?;
+    Ok(conn)
+}
+
+/// 测试用的内存库。
+///
+/// **判定规则和快照的语义只能靠它守住**：`scripts/ui-check.ps1` 覆盖的是外壳
+/// （窗口按钮、拖动、独立滚动），而「这条记录算不算数」「过去的日子会不会被改写」
+/// 在界面上看起来完全正常——它们坏掉的时候不会报错，只会悄悄给出另一个数。
+#[cfg(test)]
+pub(crate) fn open_memory() -> Result<Connection> {
+    let conn = Connection::open_in_memory()?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
     migrate(&conn)?;
     Ok(conn)
 }
@@ -82,9 +95,12 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         -- **没有 goal_id 列**：一条记录可以同时推进好几个目标，所以关联在
         -- checkin_goals 那张表里。一条都没关联也是合法的——记下来是第一步，
         -- 归到哪个目标是第二步。
+        --
+        -- **也没有 source_id 列**：归属属于「记录 × 目标」那个关系，不属于记录本身。
+        -- 同一条记录推进两个目标时，两个目标下的规则是两条不同的话，一条记录只能
+        -- 指一条来源，装不下。所以归属在 checkin_goals.source_id 上。
         CREATE TABLE IF NOT EXISTS checkins (
             id         INTEGER PRIMARY KEY,
-            source_id  INTEGER REFERENCES sources(id) ON DELETE SET NULL,
             day        TEXT NOT NULL,
             time       TEXT NOT NULL,
             value      REAL NOT NULL DEFAULT 1,
@@ -95,12 +111,14 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 
         -- 记录 ↔ 目标。多对多：一次做的事可能同时推进好几个目标。
         --
-        -- **有这条关联 ≠ 计分。** 手工记录只推动「规则里含手工打卡」的目标；
-        -- 关联到一条 git 提交规则的目标上是记下「我本来想推进它」，
-        -- 不进那条曲线。判定在 cumulative_* 里，不在这里——这样菜单能列全所有目标。
+        -- `source_id` 是**这条记录在这个目标下归到哪条判定规则**，也就是它算不算数的
+        -- 唯一依据。NULL 表示「我本来想推进它」——不进这条曲线。
+        -- 手工打卡的贡献就是「归属到这条来源的记录之和」，判定在 metrics::source_value 里，
+        -- 不在这里——这样菜单能列全所有目标。
         CREATE TABLE IF NOT EXISTS checkin_goals (
             checkin_id INTEGER NOT NULL REFERENCES checkins(id) ON DELETE CASCADE,
             goal_id    INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            source_id  INTEGER REFERENCES sources(id) ON DELETE SET NULL,
             PRIMARY KEY (checkin_id, goal_id)
         );
         CREATE INDEX IF NOT EXISTS idx_checkin_goals_goal ON checkin_goals(goal_id);
@@ -120,6 +138,11 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     )?;
     relax_checkin_goal(conn)?;
     split_checkin_goals(conn)?;
+    move_attribution_to_links(conn)?;
+    // **每次打开都补一遍**，不只在新库上做：给目标补上第一条手工规则之后，
+    // 它下面那些原本「没归到任何规则」的记录就此变得唯一可归属。
+    // 放在打开时做，CLI / 窗口 / 渲染三个入口就都覆盖到了，不用各自记着调。
+    backfill_attribution(conn)?;
     Ok(())
 }
 
@@ -198,6 +221,53 @@ fn relax_checkin_goal(conn: &Connection) -> Result<()> {
     );
     conn.pragma_update(None, "foreign_keys", "ON")?;
     r.context("迁移 checkins.goal_id 失败")?;
+    Ok(())
+}
+
+/// 迁移：把归属从 `checkins.source_id` 挪到 `checkin_goals.source_id`（2026-10-07）。
+///
+/// 原来那一列在**记录**上，可一条记录能同时推进好几个目标，而每个目标下的规则是
+/// 两条不同的话——记录级的一列装不下「在这条规则下算数、在那条规则下不算」。
+/// 归属本来就属于「记录 × 目标」这个关系。那一列也从没有写入点，一直是 NULL。
+///
+/// 判据照旧是 `pragma_table_info`，不看 `meta.schema_version`（理由见上）。
+fn move_attribution_to_links(conn: &Connection) -> Result<()> {
+    let col = |table: &str| -> Result<i64> {
+        Ok(conn.query_row(
+            &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name='source_id'"),
+            [],
+            |r| r.get(0),
+        )?)
+    };
+
+    if col("checkin_goals")? == 0 {
+        // 加列时默认值必须是 NULL，否则 SQLite 拒绝带 REFERENCES 的 ADD COLUMN。
+        conn.execute_batch(
+            "ALTER TABLE checkin_goals
+                ADD COLUMN source_id INTEGER REFERENCES sources(id) ON DELETE SET NULL;",
+        )
+        .context("给 checkin_goals 加 source_id 失败")?;
+    }
+    if col("checkins")? == 0 {
+        return Ok(()); // 新库，或者已经迁移过
+    }
+
+    // 老库里那一列有值就先搬过来再删。它一直是 NULL，但搬一次的成本是零，
+    // 而「我以为它是空的」这种事不值得赌。
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
+    let r = conn.execute_batch(
+        r#"
+        BEGIN;
+        UPDATE checkin_goals
+           SET source_id = (SELECT c.source_id FROM checkins c WHERE c.id = checkin_goals.checkin_id)
+         WHERE source_id IS NULL
+           AND (SELECT c.source_id FROM checkins c WHERE c.id = checkin_goals.checkin_id) IS NOT NULL;
+        ALTER TABLE checkins DROP COLUMN source_id;
+        COMMIT;
+        "#,
+    );
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    r.context("迁移 checkins.source_id 到 checkin_goals 失败")?;
     Ok(())
 }
 
@@ -456,13 +526,13 @@ pub fn goals_without_rule(conn: &Connection) -> Result<Vec<Goal>> {
 
 // ---------------------------------------------------------------- Checkin
 
-/// 记一条推进，并挂到若干个目标上（`goal_ids` 可以是空的 = 不关联）。
+/// 记一条推进。`links` 是「这条记录推进了哪些目标」，每项是 (目标 id, 归到哪条规则)。
 ///
-/// 关联只表示「我本来想推进它」，**不表示计分**——计分在 `cumulative_*` 里按规则判。
+/// 规则可以是 `None`：那是「我本来想推进它」——挂上去了，但不进那条曲线。
+/// 归属由 [`resolve_links`] 算好再传进来，这里不做判断。
 pub fn checkin_add(
     conn: &Connection,
-    goal_ids: &[i64],
-    source_id: Option<i64>,
+    links: &[(i64, Option<i64>)],
     day: &str,
     time: &str,
     value: f64,
@@ -470,29 +540,38 @@ pub fn checkin_add(
     now: &str,
 ) -> Result<i64> {
     conn.execute(
-        "INSERT INTO checkins(source_id, day, time, value, note, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![source_id, day, time, value, note, now],
+        "INSERT INTO checkins(day, time, value, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![day, time, value, note, now],
     )?;
     let id = conn.last_insert_rowid();
-    for g in goal_ids {
+    for (g, s) in links {
         conn.execute(
-            "INSERT OR IGNORE INTO checkin_goals(checkin_id, goal_id) VALUES (?1, ?2)",
-            params![id, g],
+            "INSERT OR IGNORE INTO checkin_goals(checkin_id, goal_id, source_id)
+             VALUES (?1, ?2, ?3)",
+            params![id, g, s],
         )?;
     }
     Ok(id)
 }
 
-/// checkin_id -> 挂着的目标 id（按 goal_id 排序，渲染顺序才稳定）。
-fn links_by_checkin(conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<i64>>> {
-    let mut stmt =
-        conn.prepare("SELECT checkin_id, goal_id FROM checkin_goals ORDER BY checkin_id, goal_id")?;
-    let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
-    let mut m: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
+/// checkin_id -> 挂着的关联（按 goal_id 排序，渲染顺序才稳定）。
+fn links_by_checkin(conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<CheckinLink>>> {
+    let mut stmt = conn.prepare(
+        "SELECT checkin_id, goal_id, source_id FROM checkin_goals ORDER BY checkin_id, goal_id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            CheckinLink {
+                goal_id: r.get(1)?,
+                counts: r.get::<_, Option<i64>>(2)?.is_some(),
+            },
+        ))
+    })?;
+    let mut m: std::collections::HashMap<i64, Vec<CheckinLink>> = std::collections::HashMap::new();
     for row in rows {
-        let (c, g) = row?;
-        m.entry(c).or_default().push(g);
+        let (c, l) = row?;
+        m.entry(c).or_default().push(l);
     }
     Ok(m)
 }
@@ -507,7 +586,7 @@ fn collect_checkins(
     let rows = stmt.query_map(args, |r| {
         Ok(Checkin {
             id: r.get(0)?,
-            goal_ids: Vec::new(),
+            links: Vec::new(),
             day: r.get(1)?,
             time: r.get(2)?,
             value: r.get(3)?,
@@ -516,7 +595,7 @@ fn collect_checkins(
     })?;
     let mut out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     for c in &mut out {
-        c.goal_ids = links.get(&c.id).cloned().unwrap_or_default();
+        c.links = links.get(&c.id).cloned().unwrap_or_default();
     }
     Ok(out)
 }
@@ -558,47 +637,156 @@ pub fn checkins_all(conn: &Connection) -> Result<Vec<Checkin>> {
     )
 }
 
-/// 这条规则接不接受手工记录。**只有含手工打卡来源的目标，手工记录才算数。**
+// ------------------------------------------------- 归属：记录归到哪条规则
+
+/// **这一条规则**在截止某天的贡献：归属到它的记录之和。
 ///
-/// 设计文档 §5.3 的例子 C：在 Learn-English 上写代码不能推动「英语」那条线——
-/// 那条线的规则是「只算复习记录」。允许手工记录推动任何目标，
-/// 卡片底下印着的那条规则就不再决定曲线了。
-fn manual_counts(conn: &Connection, goal_id: i64) -> Result<bool> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sources WHERE goal_id=?1 AND kind='manual_checkin'",
-        params![goal_id],
+/// 归属写在 `checkin_goals.source_id` 上。**这是判定规则与数字之间唯一的连接点**——
+/// 不看这一列，卡片底下印的那句「什么算推进它」对曲线就没有任何影响，
+/// 挂在这个目标上的什么记录都会让它涨一格，那就是一条假曲线。
+pub fn source_checkin_value(conn: &Connection, source_id: i64, day: &str) -> Result<f64> {
+    Ok(conn.query_row(
+        "SELECT COALESCE(SUM(c.value), 0) FROM checkins c
+          JOIN checkin_goals cg ON cg.checkin_id = c.id
+         WHERE cg.source_id=?1 AND c.day<=?2",
+        params![source_id, day],
         |r| r.get(0),
-    )?;
-    Ok(n > 0)
+    )?)
 }
 
-/// 目标当前的累计值。
-pub fn cumulative_now(conn: &Connection, goal_id: i64) -> Result<f64> {
-    if !manual_counts(conn, goal_id)? {
-        return Ok(0.0);
-    }
-    let v: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(c.value), 0) FROM checkins c
-         JOIN checkin_goals cg ON cg.checkin_id = c.id WHERE cg.goal_id=?1",
-        params![goal_id],
-        |r| r.get(0),
-    )?;
-    Ok(v)
+/// 这个目标下**能收手工记录**的规则（按 id 排序，渲染顺序才稳定）。
+pub fn manual_sources_of(conn: &Connection, goal_id: i64) -> Result<Vec<Source>> {
+    Ok(sources_of(conn, goal_id)?
+        .into_iter()
+        .filter(|s| s.kind == SourceKind::ManualCheckin)
+        .collect())
 }
 
-/// 截止某天的累计值。
-pub fn cumulative_until(conn: &Connection, goal_id: i64, day: &str) -> Result<f64> {
-    if !manual_counts(conn, goal_id)? {
-        return Ok(0.0);
+/// 这条记录该归到哪条规则。**候选唯一才自动归属**，0 条或 ≥2 条都返回 None。
+///
+/// - 0 条：这个目标下没有手工规则收它。挂上去是记下「我本来想推进它」，不进曲线。
+/// - ≥2 条：有歧义。**不替人猜**——猜错就是一条假曲线，而假曲线正是这个产品要防的东西。
+///   窗口里由选择器问一句，CLI 上用 `--source`。
+pub fn pick_source(conn: &Connection, goal_id: i64) -> Result<Option<i64>> {
+    let cands = manual_sources_of(conn, goal_id)?;
+    Ok(if cands.len() == 1 {
+        Some(cands[0].id)
+    } else {
+        None
+    })
+}
+
+/// 把「推进了哪些目标」解析成「每条关联归到哪条规则」。
+///
+/// `picks` 是人点过的「谁归谁」——每项是 (目标 id, 规则 id)。两种情形会拒绝，
+/// 都是**机械的拒绝**：
+///
+/// - 指定的规则不属于那个目标：不能靠一个 id 就把记录挂到别人家的规则上；
+/// - 某个目标下有两条以上手工规则，而人没给它指定：这时候说不清它算哪条，
+///   与其替你挑一条，不如让你指认——**这条记录算不算数，只有规则能回答**。
+///
+/// 返回的每项是 (目标 id, 归到哪条规则)。规则为 `None` 不报错：
+/// 那只是「记下了，但不算数」——挂到一条 git 规则的目标上就是这个意思。
+pub fn resolve_links(
+    conn: &Connection,
+    goal_ids: &[i64],
+    picks: &[(i64, i64)],
+) -> Result<Vec<(i64, Option<i64>)>> {
+    for (goal_id, source_id) in picks {
+        let g_title = goal_by_id(conn, *goal_id)?
+            .map(|x| x.title)
+            .unwrap_or_else(|| format!("#{goal_id}"));
+        if !goal_ids.contains(goal_id) {
+            bail!("目标「{g_title}」不在这次记录里，不能给它指定规则");
+        }
+        if !manual_sources_of(conn, *goal_id)?
+            .iter()
+            .any(|s| s.id == *source_id)
+        {
+            bail!("规则 #{source_id} 不是「{g_title}」下的一条手工规则，不能拿它记账");
+        }
     }
-    let v: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(c.value), 0) FROM checkins c
-         JOIN checkin_goals cg ON cg.checkin_id = c.id
-         WHERE cg.goal_id=?1 AND c.day<=?2",
-        params![goal_id, day],
+
+    let mut out = Vec::with_capacity(goal_ids.len());
+    for g in goal_ids {
+        let cands = manual_sources_of(conn, *g)?;
+        let picked = match picks.iter().find(|(gi, _)| gi == g) {
+            Some((_, si)) => Some(*si),
+            None => match cands.len() {
+                1 => Some(cands[0].id),
+                0 => None,
+                _ => {
+                    let title = goal_by_id(conn, *g)?
+                        .map(|x| x.title)
+                        .unwrap_or_else(|| format!("#{g}"));
+                    bail!("{}", ambiguous_msg(&title, &cands))
+                }
+            },
+        };
+        out.push((*g, picked));
+    }
+    Ok(out)
+}
+
+/// 歧义时的拒绝语。把候选连同 id 一起列出来，让人不用回头去查就能指认。
+fn ambiguous_msg(goal_title: &str, cands: &[Source]) -> String {
+    let list: Vec<String> = cands
+        .iter()
+        .map(|s| {
+            let what = if !s.rationale.trim().is_empty() {
+                s.rationale.trim()
+            } else if !s.target.trim().is_empty() {
+                s.target.trim()
+            } else {
+                "没写说明"
+            };
+            format!("#{} {}", s.id, what)
+        })
+        .collect();
+    format!(
+        "「{goal_title}」下有 {} 条规则都能收这条记录：{}。它算哪一条得你来定——不替你猜。",
+        cands.len(),
+        list.join(" / ")
+    )
+}
+
+/// 把「没归到任何规则」的关联补上归属：**候选唯一才补**。返回本次补上的条数。
+///
+/// 每次开库都跑（见 [`migrate`]）。所以「先把账记了、后来才给目标补上规则」
+/// 这种顺序不会留下一条永远不肯算数的记录——规则一到位，它就归位了。
+pub fn backfill_attribution(conn: &Connection) -> Result<usize> {
+    let pending: Vec<(i64, i64)> = {
+        let mut stmt = conn.prepare(
+            "SELECT checkin_id, goal_id FROM checkin_goals
+              WHERE source_id IS NULL ORDER BY checkin_id, goal_id",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut fixed = 0usize;
+    for (checkin_id, goal_id) in pending {
+        if let Some(sid) = pick_source(conn, goal_id)? {
+            conn.execute(
+                "UPDATE checkin_goals SET source_id=?1 WHERE checkin_id=?2 AND goal_id=?3",
+                params![sid, checkin_id, goal_id],
+            )?;
+            fixed += 1;
+        }
+    }
+    Ok(fixed)
+}
+
+/// 这个目标下「挂上来了、但没归到任何规则」的记录数。
+///
+/// 详情页据此说明为什么它们不计分——**别让人点完了才知道**。
+pub fn unattributed_count(conn: &Connection, goal_id: i64) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM checkin_goals cg
+          JOIN checkins c ON c.id = cg.checkin_id
+         WHERE cg.goal_id=?1 AND cg.source_id IS NULL",
+        params![goal_id],
         |r| r.get(0),
-    )?;
-    Ok(v)
+    )?)
 }
 
 /// 目标下最早的打卡日期。没有则 None。
@@ -676,4 +864,116 @@ pub fn last_snapshot_day(conn: &Connection, goal_id: i64) -> Result<Option<Strin
         )
         .optional()?
         .flatten())
+}
+
+// ---------------------------------------------------------------- 测试
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NOW: &str = "2026-10-07 09:00:00";
+    const DAY: &str = "2026-10-07";
+
+    /// 改归属那次（2026-10-07）之前的 schema，原样抄在这里。
+    ///
+    /// **照着一个真实的老库写，不照着 migration 写**——写成 migration 的镜像，
+    /// 两边就会一起错，而这类错是静默的：老库打不开或者数字变了，
+    /// 只在升级后第一次打开的那一刻发生一次。
+    const OLD_SCHEMA: &str = r#"
+        CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+        CREATE TABLE goals (
+            id INTEGER PRIMARY KEY, title TEXT NOT NULL UNIQUE, why TEXT NOT NULL DEFAULT '',
+            color TEXT NOT NULL DEFAULT 'blue', status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL, archived_at TEXT);
+        CREATE TABLE sources (
+            id INTEGER PRIMARY KEY, goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL, target TEXT NOT NULL DEFAULT '',
+            params TEXT NOT NULL DEFAULT '{}', rationale TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL);
+        CREATE TABLE checkins (
+            id INTEGER PRIMARY KEY,
+            source_id INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+            day TEXT NOT NULL, time TEXT NOT NULL, value REAL NOT NULL DEFAULT 1,
+            note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+        CREATE TABLE checkin_goals (
+            checkin_id INTEGER NOT NULL REFERENCES checkins(id) ON DELETE CASCADE,
+            goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            PRIMARY KEY (checkin_id, goal_id));
+        CREATE TABLE snapshots (
+            goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            day TEXT NOT NULL, cumulative REAL NOT NULL, PRIMARY KEY (goal_id, day));
+    "#;
+
+    fn old_db_one_goal(checkin_source_id: Option<i64>) -> Result<Connection> {
+        let conn = Connection::open_in_memory()?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.execute_batch(OLD_SCHEMA)?;
+        conn.execute(
+            "INSERT INTO goals(id,title,color,status,created_at) VALUES (1,'英语','blue','active',?1)",
+            params![NOW],
+        )?;
+        conn.execute(
+            "INSERT INTO sources(id,goal_id,kind,target,params,rationale,created_at)
+             VALUES (1,1,'manual_checkin','','{}','读完一章算一次',?1)",
+            params![NOW],
+        )?;
+        conn.execute(
+            "INSERT INTO checkins(id,source_id,day,time,value,note,created_at)
+             VALUES (1,?1,?2,'10:00',2,'读完第 3 章',?3)",
+            params![checkin_source_id, DAY, NOW],
+        )?;
+        conn.execute("INSERT INTO checkin_goals(checkin_id,goal_id) VALUES (1,1)", [])?;
+        Ok(conn)
+    }
+
+    fn columns(conn: &Connection, table: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+            .unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn 老库打开时归属被搬到关联上且数字不变() {
+        // 老库里归属写在记录上，而那一列一直是 NULL（从来没有写入点）。
+        let conn = old_db_one_goal(None).unwrap();
+
+        // 新代码打开老库 —— 这一步就是老用户升级时真实发生的事。
+        migrate(&conn).unwrap();
+
+        assert!(
+            !columns(&conn, "checkins").contains(&"source_id".to_string()),
+            "记录上的归属列该没了"
+        );
+        assert!(columns(&conn, "checkin_goals").contains(&"source_id".to_string()));
+
+        // 唯一一条手工规则 → 老记录被回填归位，数字和升级前一样。
+        assert_eq!(source_checkin_value(&conn, 1, DAY).unwrap(), 2.0);
+        assert_eq!(unattributed_count(&conn, 1).unwrap(), 0);
+    }
+
+    #[test]
+    fn 老库里记录上的归属有值时会被搬过来() {
+        // 这一列虽然从没有写入点，但真要有值，迁移必须搬过去而不是丢掉。
+        let conn = old_db_one_goal(Some(1)).unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(source_checkin_value(&conn, 1, DAY).unwrap(), 2.0);
+    }
+
+    #[test]
+    fn 反复打开同一个库是安全的() {
+        let conn = open_memory().unwrap();
+        // 每个命令都会开一次库（窗口里每按一次就是一次），迁移不能越迁越乱。
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap();
+        let goal = goal_add(&conn, "英语", "", "blue", NOW).unwrap();
+        source_add(&conn, goal, SourceKind::ManualCheckin, "", "{}", "读完一章", NOW).unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(sources_of(&conn, goal).unwrap().len(), 1);
+        assert!(columns(&conn, "checkin_goals").contains(&"source_id".to_string()));
+    }
 }

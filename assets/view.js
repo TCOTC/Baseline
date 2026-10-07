@@ -197,6 +197,19 @@
     var chips = $('gchips');
     var more = $('gmore');
     var gmenu = $('gmenu');
+    var rpick = $('rpick');
+    var rlist = $('rpick-list');
+
+    // 每个目标下能收手工记录的规则，由 Rust 列好（见 render::composer_html）。
+    // **这里只负责问，不负责判**：归属由内核定，唯一就自动归，
+    // 两条以上而没人指认就拒绝。选择器只是把那次拒绝提前成一次询问。
+    var rules = {};
+    try {
+      var rulesEl = $('composer-rules');
+      rules = rulesEl ? JSON.parse(rulesEl.textContent) : {};
+    } catch (e) {
+      report('composer-rules', e);
+    }
 
     // 默认两行、随内容长高。
     var MAX_H = 160;
@@ -218,6 +231,60 @@
     var chosen = {};
     function ids() { return Object.keys(chosen); }
 
+    // 人点过的「这条记录算哪条规则」，键是目标 id。
+    // 只有「一个目标下两条以上规则都能收它」时才需要它——一条的情况内核会自己归。
+    var picked = {};
+
+    // 选中的目标里，哪些还没有指认规则。有的话不能提交：
+    // 提交了内核也会拒绝，不如在这里先说清楚。
+    function missingPick() {
+      var out = null;
+      ids().forEach(function (gid) {
+        var r = rules[gid];
+        if (r && r.sources.length > 1 && !picked[gid]) out = out || gid;
+      });
+      return out;
+    }
+
+    // 把需要指认的目标和它们的规则画出来。一条规则的目标不出现在这里——
+    // 只有一个选项的选择器不是选择器，是噪音。
+    function refreshRules() {
+      if (!rpick || !rlist) return;
+
+      // 取消勾选的目标，之前替它选的规则跟着作废。
+      // 留着会让「我已经取消了它」和「它还在算」同时成立。
+      Object.keys(picked).forEach(function (gid) {
+        if (!chosen[gid]) delete picked[gid];
+      });
+
+      var groups = [];
+      ids().forEach(function (gid) {
+        var r = rules[gid];
+        if (r && r.sources.length > 1) groups.push({ goal: gid, title: r.title, list: r.sources });
+      });
+
+      rpick.hidden = groups.length === 0;
+      rlist.innerHTML = '';
+      groups.forEach(function (g) {
+        if (groups.length > 1) {
+          var h = document.createElement('div');
+          h.className = 'rpick-g';
+          h.textContent = g.title;
+          rlist.appendChild(h);
+        }
+        g.list.forEach(function (s) {
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'ropt' + (picked[g.goal] === s.id ? ' on' : '');
+          b.dataset.goal = g.goal;
+          b.dataset.src = s.id;
+          b.textContent = s.what;
+          b.title = '规则 #' + s.id;
+          rlist.appendChild(b);
+        });
+      });
+    }
+
     function sync() {
       if (field) field.value = ids().join(',');
       Array.prototype.forEach.call(document.querySelectorAll('.gchip'), function (b) {
@@ -227,6 +294,7 @@
         b.classList.toggle('on', !!chosen[b.dataset.goal]);
       });
       if (more) more.classList.toggle('on', ids().length > 0);
+      refreshRules();
     }
 
     // 一行放不下就整排收起来，只留一个「…」。用真实的布局宽度判断，
@@ -263,6 +331,18 @@
         if (b) toggle(b.dataset.goal);
       });
     }
+    if (rlist) {
+      rlist.addEventListener('click', function (ev) {
+        var b = ev.target.closest('.ropt');
+        if (!b) return;
+        var g = b.dataset.goal, s = Number(b.dataset.src);
+        // 再点一下取消：选错了要能退回去，不然只能重开窗口。
+        if (picked[g] === s) delete picked[g]; else picked[g] = s;
+        refreshRules();
+        light(rpick, !!missingPick()); // 指认过了就不再拦着
+        input.focus();
+      });
+    }
     if (more && gmenu) {
       more.addEventListener('click', function () { gmenu.hidden = !gmenu.hidden; });
       // 点别处、按 Esc 都收起来：一个不会消失的浮层会挡住它下面的东西。
@@ -277,26 +357,53 @@
     sync();
     fitChips();
 
-    function fail(e) {
-      form.classList.remove('busy');
-      input.disabled = false;
-      report('add_checkin', e);
-      input.placeholder = '没记上：' + ((e && e.message) || e);
+    var hintT = 0;
+    function hint(msg) {
+      input.placeholder = msg;
       form.classList.add('broke');
-      setTimeout(function () {
+      clearTimeout(hintT);
+      hintT = setTimeout(function () {
         form.classList.remove('broke');
         input.placeholder = input.dataset.ph || '';
         grow();
       }, 4000);
     }
 
+    // 让某个元素自己亮起来。**提示不能只写在 placeholder 上**——
+    // 输入框里有字的时候 placeholder 根本看不见，而「两条规则都能收它」
+    // 恰恰总是在写完一句话、按下回车的那一刻才遇到。
+    //
+    // 亮到人真的动手为止（选了一条规则就灭），不是闪一下就没了：
+    // 闪一下的东西会被当成没看见，而这是唯一挡住这次记录的坎。
+    function light(el, on) {
+      if (!el) return;
+      el.classList.toggle('broke', on !== false);
+    }
+
+    function fail(e) {
+      form.classList.remove('busy');
+      input.disabled = false;
+      report('add_checkin', e);
+      hint('没记上：' + ((e && e.message) || e));
+    }
+
     function send() {
       var text = input.value.trim();
       if (!text || form.classList.contains('busy')) return;
+      // 两条规则都能收这条记录时必须先指认：内核会拒绝，但让它先拒绝一次
+      // 等于「点完了才知道」，而这条界线本来就该在点之前说。
+      if (missingPick()) {
+        refreshRules();
+        light(rpick); // 要动手的是这个选择器，让它自己说话
+        hint('这条记录算哪条规则？先在上面选一条');
+        return;
+      }
       form.classList.add('busy');
       input.disabled = true;
       // 一个都没选就是 []，Tauri 那边收到空数组 —— 这条记录不关联任何目标。
-      invoke('add_checkin', { goalIds: ids().map(Number), note: text })
+      var picks = [];
+      Object.keys(picked).forEach(function (g) { picks.push([Number(g), picked[g]]); });
+      invoke('add_checkin', { goalIds: ids().map(Number), note: text, picks: picks })
         .then(function () {
           // 提交后整页重来：Rust 会重算今天的快照，流水重新落到底、输入框重新聚焦。
           // 不做局部插入——那样「卡片上的数字」和「曲线末端」就要在两边各算一次。

@@ -60,6 +60,12 @@ enum Cmd {
         /// 时间 HH:MM，默认此刻。补记旧账时用得上。
         #[arg(long)]
         time: Option<String>,
+        /// 归到哪条判定规则（来源 id）。
+        ///
+        /// 目标下只有一条手工规则时会自动归属，不用写；有两条以上就必须写——
+        /// 那时候「这条记录算哪一条」只有你知道，工具替你猜出来的就是假曲线。
+        #[arg(long)]
+        source: Option<i64>,
     },
 
     /// 补齐每日快照（幂等；已写入的日期不会改写）
@@ -175,7 +181,7 @@ fn main() -> Result<()> {
             }
             for g in goals {
                 let srcs = db::sources_of(&conn, g.id)?;
-                let cur = db::cumulative_now(&conn, g.id)?;
+                let cur = metrics::value_today(&conn, g.id, today)?;
                 let rule = if srcs.is_empty() {
                     "  ⚠ 没有判定规则".to_string()
                 } else {
@@ -230,7 +236,10 @@ fn main() -> Result<()> {
                 }
             }
             println!();
-            println!("当前累计  {}", render::num(db::cumulative_now(&conn, g.id)?));
+            println!(
+                "当前累计  {}",
+                render::num(metrics::value_today(&conn, g.id, today)?)
+            );
         }
 
         Cmd::Goal(GoalCmd::Archive { goal, reason }) => {
@@ -257,8 +266,13 @@ fn main() -> Result<()> {
             if rationale.trim().is_empty() {
                 println!("提示：没写 --rationale。三个月后你会想不起当初为什么这样定。");
             }
+            // 新规则可能让这个目标下原本悬着的记录变得唯一可归属（见 db::backfill_attribution）。
+            let fixed = db::backfill_attribution(&conn)?;
+            if fixed > 0 {
+                println!("已把 {fixed} 条原本没归到规则的记录归到它名下。");
+            }
             // 立刻给出当前值 —— 「建完立刻验证」
-            let cur = db::cumulative_now(&conn, g.id)?;
+            let cur = metrics::value_today(&conn, g.id, today)?;
             println!("当前值：{}", render::num(cur));
             if cur == 0.0 {
                 println!("（还是 0。要么规则写错了，要么这条线真的还没动——两种都值得知道。）");
@@ -288,6 +302,7 @@ fn main() -> Result<()> {
             value,
             date,
             time,
+            source,
         } => {
             // 不写目标 = 记一条不关联的。不校验判定规则——没有目标就没有规则可违反。
             let g = match &goal {
@@ -321,11 +336,18 @@ fn main() -> Result<()> {
                 }
             });
             let note = note.unwrap_or_default();
+            // 归属在这一步定：唯一就自动归，两条以上就得用 --source 指认。
+            let picks: Vec<(i64, i64)> = match (&g, source) {
+                (Some(g), Some(s)) => vec![(g.id, s)],
+                (None, Some(_)) => anyhow::bail!("--source 要配一个目标一起用"),
+                _ => Vec::new(),
+            };
             let ids: Vec<i64> = g.iter().map(|g| g.id).collect();
-            let id = db::checkin_add(&conn, &ids, None, &day, &time, value, &note, &now_s)?;
+            let links = db::resolve_links(&conn, &ids, &picks)?;
+            let id = db::checkin_add(&conn, &links, &day, &time, value, &note, &now_s)?;
             match &g {
                 Some(g) => {
-                    let cur = db::cumulative_now(&conn, g.id)?;
+                    let cur = metrics::value_today(&conn, g.id, today)?;
                     println!(
                         "已记录 #{} · {} · {} {} → 当前累计 {}",
                         id,
@@ -396,12 +418,21 @@ fn main() -> Result<()> {
                 } else {
                     render::num(s.delta_week)
                 };
+                // 「规则没接线」和「接上了但没动」在这里也必须分开说：
+                // 后者是事实，前者是工具还没做完——用同一句话讲就是把后者讲成了前者。
+                let note = if !s.wired {
+                    format!("（{}还没接入）", s.unwired.join("、"))
+                } else if !s.has_data {
+                    "（还没有任何记录）".to_string()
+                } else {
+                    String::new()
+                };
                 println!(
                     "{:<18} 当前 {:<6} 本周 {:<6} {}",
                     g.title,
                     render::num(s.current),
                     d,
-                    if s.has_data { "" } else { "（还没有任何记录）" }
+                    note
                 );
             }
             println!("{:-<44}", "");

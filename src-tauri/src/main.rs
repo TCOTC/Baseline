@@ -193,6 +193,7 @@ fn add_checkin(
     state: tauri::State<'_, AppDb>,
     goal_ids: Vec<i64>,
     note: String,
+    picks: Vec<(i64, i64)>,
 ) -> Result<(), String> {
     let conn = db::open(&state.0).map_err(err)?;
     // 挂到没有手工打卡规则的目标上是允许的——只记下「我本来想推进它」，
@@ -202,12 +203,14 @@ fn add_checkin(
             return Err(format!("目标 #{id} 不存在"));
         }
     }
+    // 归属由内核定，界面只是把人在选择器里点的那条传下来。
+    // 「两条规则都能收它」而人没选时，这里会拒绝——拒绝语里带着候选，界面直接显示。
+    let links = db::resolve_links(&conn, &goal_ids, &picks).map_err(err)?;
     let now = Local::now();
     let stamp = now.format("%Y-%m-%d %H:%M:%S").to_string();
     db::checkin_add(
         &conn,
-        &goal_ids,
-        None,
+        &links,
         &now.format("%Y-%m-%d").to_string(),
         &now.format("%H:%M").to_string(),
         1.0,
@@ -248,8 +251,11 @@ fn add_goal(
     let color = db::next_free_color(&conn).map_err(err)?;
     let id = db::goal_add(&conn, &title, why.trim(), &color, &stamp).map_err(err)?;
     db::source_add(&conn, id, kind, target.trim(), "{}", rationale.trim(), &stamp).map_err(err)?;
+    // 规则刚落地就把归属补一遍，而不是等下次开库：这条规则可能正好是某个目标下
+    // 唯一能收手工记录的一条，那么它下面原来「没归到任何规则」的记录此刻就该归位。
+    db::backfill_attribution(&conn).map_err(err)?;
     metrics::roll(&conn, now.date_naive()).map_err(err)?;
-    db::cumulative_now(&conn, id).map_err(err)
+    metrics::value_today(&conn, id, now.date_naive()).map_err(err)
 }
 
 /// 改目标的名字和动机。
@@ -291,8 +297,10 @@ fn add_source(
     let now = Local::now();
     let stamp = now.format("%Y-%m-%d %H:%M:%S").to_string();
     db::source_add(&conn, goal_id, kind, target.trim(), "{}", rationale.trim(), &stamp).map_err(err)?;
+    // 见 add_goal：新规则可能让这个目标下原本悬着的记录变得唯一可归属。
+    db::backfill_attribution(&conn).map_err(err)?;
     metrics::roll(&conn, now.date_naive()).map_err(err)?;
-    db::cumulative_now(&conn, goal_id).map_err(err)
+    metrics::value_today(&conn, goal_id, now.date_naive()).map_err(err)
 }
 
 #[tauri::command]

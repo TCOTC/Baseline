@@ -6,12 +6,18 @@
 
 ```powershell
 cargo build                                                       # 内核 + CLI
+cargo test                                                        # 判定规则 / 归属 / 快照语义
 cargo run -- init                                                 # 建库（幂等）
 cargo run -- render --open                                        # 导出单文件 HTML 并打开
 cargo run -p baseline-desktop                                     # 桌面窗口（窗口里 F5 即刷新数据）
 powershell -ExecutionPolicy Bypass -File scripts/demo.ps1         # 演示数据，写 data/_demo.db
 powershell -ExecutionPolicy Bypass -File scripts/ui-check.ps1     # 端到端 UI 检查（15 项，退出码 0/1）
 ```
+
+`cargo test` 和 `ui-check.ps1` 的覆盖面**不重叠**，改哪边跑哪边：前者守内核语义
+（判定规则、记录归属、快照冻结），后者守外壳（窗口按钮、拖动、两栏独立滚动）。
+内核那一侧坏掉时界面完全正常，只是数字变成另一个——没有报错，也没有红框。
+`ui-check.ps1` 退出码 2 是「拿不到前台窗口，这一轮没跑」，不是通过。
 
 默认库是 `%APPDATA%\Baseline\baseline.db`（`--db <路径>` 或 `BASELINE_DB` 可覆盖）。
 **不要拿真实库跑自动化**，演示和测试一律指向 `data/` 下的临时库。窗口没有开发工具，
@@ -27,6 +33,8 @@ powershell -ExecutionPolicy Bypass -File scripts/ui-check.ps1     # 端到端 UI
 ## 硬约束
 
 - **判定口径只有一份实现。** 内核是 lib（`src/lib.rs`），CLI 与桌面外壳都调它；同一个语义不要在两处各写一遍。
+  判定就是 `metrics::source_value`，记录归属就是 `db::resolve_links`：**唯一能确定就自动归属，
+  两条以上一律拒绝并列出候选**，不替人猜。窗口里那个选择器只负责问，不负责判。
 - **界面由 Rust 渲染**（`src/render.rs`）。唯一例外是流水行：它要虚拟滚动，所以由 `assets/view.js` 拼装，
   但行的 class 仍然只能来自 `assets/view.css`。
 - **零硬编码颜色**，一律走 CSS 变量；SVG 内部类名必须带 `cv-` 前缀；数字必须 `tabular-nums`。

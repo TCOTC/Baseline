@@ -49,6 +49,37 @@ fn composer_html(conn: &Connection, goals: &[Goal]) -> Result<String> {
     }
     let manual = manual_goals(conn, goals)?;
 
+    // 每个目标下能收手工记录的规则，交给界面判断「要不要问一句」。
+    //
+    // **这只是把候选列出来给人点，不是第二套判定。** 归属仍然由内核的
+    // `db::resolve_links` 定：唯一就自动归，两条以上而没人指认就拒绝——
+    // 界面上这个选择器只是把那次拒绝提前成一次询问。
+    let mut rules_map = serde_json::Map::new();
+    for g in goals {
+        let list: Vec<serde_json::Value> = db::manual_sources_of(conn, g.id)?
+            .iter()
+            .map(|s| {
+                let what = if !s.rationale.trim().is_empty() {
+                    s.rationale.trim().to_string()
+                } else if !s.target.trim().is_empty() {
+                    s.target.trim().to_string()
+                } else {
+                    "没写说明".to_string()
+                };
+                json!({ "id": s.id, "what": what })
+            })
+            .collect();
+        if !list.is_empty() {
+            rules_map.insert(
+                g.id.to_string(),
+                json!({ "title": g.title, "sources": list }),
+            );
+        }
+    }
+    let rules_json = serde_json::Value::Object(rules_map)
+        .to_string()
+        .replace('<', "\\u003c");
+
     let mut chips = String::new();
     let mut menu = String::new();
     for g in goals {
@@ -88,6 +119,10 @@ fn composer_html(conn: &Connection, goals: &[Goal]) -> Result<String> {
           <div class="gmenu-h">这条记录推进了哪些目标？<span>可以多选，也可以一个都不选</span></div>
           {menu}
         </div>
+        <div class="rpick" id="rpick" hidden>
+          <div class="rpick-h">这条记录算哪条规则？<span>有两条都能收它——它算哪一条只有你知道</span></div>
+          <div class="rpick-list" id="rpick-list"></div>
+        </div>
         <div class="box">
           <textarea id="composer-input" rows="2" maxlength="500"
                     placeholder="刚做了什么？" aria-label="记一条"></textarea>
@@ -97,9 +132,11 @@ fn composer_html(conn: &Connection, goals: &[Goal]) -> Result<String> {
             <button type="submit" class="send" tabindex="-1">记下</button>
           </div>
         </div>
-      </form>"#,
+      </form>
+      <script type="application/json" id="composer-rules">{rules_json}</script>"#,
         menu = menu,
         chips = chips,
+        rules_json = rules_json,
     ))
 }
 
@@ -217,6 +254,13 @@ fn curve_svg(s: &GoalSeries) -> String {
     const H: f64 = 44.0;
     const PAD: f64 = 5.0;
 
+    // 先判「规则有没有接线」，再判「有没有记录」。
+    // 一条只有 git 规则的目标，值恒为 0；说它「还没有任何记录」是把
+    // 「没接线」讲成了「没动」——两句话差着一整条数据源。
+    if !s.wired {
+        return r#"<div class="cempty unwired">规则还没接线 —— 这条线现在算不出数</div>"#
+            .to_string();
+    }
     if !s.has_data {
         return r#"<div class="cempty">这条线还没有任何记录</div>"#.to_string();
     }
@@ -267,9 +311,12 @@ fn strip_html(on: &[bool]) -> String {
 /// 于是「窗口只显示这一个目标」这件事仍然由 Rust 一次渲染完成，
 /// 不需要在 JS 里再维护一套详情页的模板。
 fn card_html(g: &Goal, s: &GoalSeries, rule_line: &str, clickable: bool) -> String {
-    let has = s.has_data;
+    let has = s.has_data && s.wired;
     let (vclass, dclass) = if has { ("v", "cd") } else { ("v none", "cd zero") };
-    let delta = if has {
+    let delta = if !s.wired {
+        // 「没动」和「算不出来」必须分开说，否则这条线会一直显示成「还没开始」。
+        "规则未接线".to_string()
+    } else if has {
         let d = s.delta_week;
         if d > 0.0 {
             format!("+{}", num(d))
@@ -355,13 +402,8 @@ fn day_label(day: &NaiveDate, today: NaiveDate) -> (String, Option<String>) {
 ///
 /// 顺序是**下新上旧**：像一条流水，最新的一条贴着底部输入框。
 /// 行的结构由 `assets/view.js` 拼，class 仍然来自 `view.css`。
-fn timeline_json(
-    conn: &Connection,
-    goals: &HashMap<i64, Goal>,
-    manual: &std::collections::HashSet<i64>,
-    today: NaiveDate,
-) -> Result<String> {
-    Ok(rows_json(&db::checkins_all(conn)?, goals, manual, today))
+fn timeline_json(conn: &Connection, goals: &HashMap<i64, Goal>, today: NaiveDate) -> Result<String> {
+    Ok(rows_json(&db::checkins_all(conn)?, goals, today))
 }
 
 /// 哪些目标的规则接受手工记录。
@@ -388,7 +430,6 @@ fn manual_goals(conn: &Connection, goals: &[Goal]) -> Result<std::collections::H
 fn rows_json(
     checkins: &[crate::model::Checkin],
     goals: &HashMap<i64, Goal>,
-    manual: &std::collections::HashSet<i64>,
     today: NaiveDate,
 ) -> String {
     let mut rows: Vec<serde_json::Value> = Vec::new();
@@ -411,15 +452,17 @@ fn rows_json(
             last_day = c.day.clone();
         }
         // 一条记录可以挂多个目标。挂着的都列出来；
-        // `counts` 为假表示「这条规则不接受手工记录」，标签会画得安静一点。
+        // `counts` 直接来自归属本身：**归到了那个目标的一条规则上才算数**。
+        // 不能拿「这个目标有没有手工规则」去推——删掉一条规则之后两者就会分叉，
+        // 而分叉的表现是流水上写着计入、曲线里却没有它。
         let chips: Vec<serde_json::Value> = c
-            .goal_ids
+            .links
             .iter()
-            .map(|id| match goals.get(id) {
+            .map(|l| match goals.get(&l.goal_id) {
                 Some(g) => json!({
                     "title": g.title,
                     "color": g.color,
-                    "counts": manual.contains(id),
+                    "counts": l.counts,
                 }),
                 None => json!({ "title": "（已删除）", "color": "none", "counts": false }),
             })
@@ -509,7 +552,27 @@ fn detail_body(conn: &Connection, today: NaiveDate, g: &Goal) -> Result<String> 
         );
     }
 
-    let has = s.has_data;
+    // 挂上来了、但没归到任何规则，所以没进曲线。**别让人自己发现这件事**——
+    // 一条记录明明在流水里，数字却不动，看起来就是坏的。
+    //
+    // 只有存在手工规则时才说：挂到一条 git 规则的目标上本来就该是这个状态
+    // （那是「我本来想推进它」），为它专门提示一句是噪音。
+    let manual_n = db::manual_sources_of(conn, g.id)?.len();
+    if manual_n > 0 {
+        let loose = db::unattributed_count(conn, g.id)?;
+        if loose > 0 {
+            let msg = if manual_n > 1 {
+                format!(
+                    "有 {loose} 条记录没归到任何规则，所以没进曲线——这个目标下有两条以上规则，得说清每条记录算哪一条。"
+                )
+            } else {
+                format!("有 {loose} 条记录没归到规则，所以没进曲线。")
+            };
+            rules.push_str(&format!(r#"<div class="hint warn">{}</div>"#, esc(&msg)));
+        }
+    }
+
+    let has = s.has_data && s.wired;
     let (vclass, val) = if has {
         ("dval", num(s.current))
     } else {
@@ -644,7 +707,6 @@ pub fn render(
 ) -> Result<String> {
     let goals = db::goal_list(conn, false)?;
     let goal_map: HashMap<i64, Goal> = goals.iter().map(|g| (g.id, g.clone())).collect();
-    let manual = manual_goals(conn, &goals)?;
 
     // 目标不存在（链接过期、被删了）就退回主视图，不要给一页空白。
     let focused = match goal {
@@ -669,7 +731,7 @@ pub fn render(
     let (body, log_json) = if let Some(g) = &focused {
         (
             detail_body(conn, today, g)?,
-            rows_json(&db::checkins_of(conn, g.id)?, &goal_map, &manual, today),
+            rows_json(&db::checkins_of(conn, g.id)?, &goal_map, today),
         )
     } else {
         let mut cards = String::new();
@@ -716,7 +778,7 @@ pub fn render(
                 addgoal = addgoal,
                 composer = composer,
             ),
-            timeline_json(conn, &goal_map, &manual, today)?,
+            timeline_json(conn, &goal_map, today)?,
         )
     };
 
