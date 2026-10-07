@@ -33,8 +33,22 @@ powershell -ExecutionPolicy Bypass -File scripts/ui-check.ps1     # 端到端 UI
 ## 硬约束
 
 - **判定口径只有一份实现。** 内核是 lib（`src/lib.rs`），CLI 与桌面外壳都调它；同一个语义不要在两处各写一遍。
-  判定就是 `metrics::source_value`，记录归属就是 `db::resolve_links`：**唯一能确定就自动归属，
-  两条以上一律拒绝并列出候选**，不替人猜。窗口里那个选择器只负责问，不负责判。
+  判定就是 `metrics::source_value`，记录归属就是 `db::resolve_links`。归不下来的**一律不猜**，
+  但有两种处置：`defer = false` 就地拒绝并列出候选（说不清就让人现在选）；
+  `defer = true` **先挂空着写下来**，等 AI 补判或者等人去详情页指认。
+  窗口里那排气泡只负责问，不负责判。
+- **AI 不能成为判定的第二份实现。** 它只从调用方给的候选里挑一条，候选之外的 id 一律作废
+  （`ai::parse_reply` 核对），置信度不到门槛就什么都不选。
+  **顺序也不许反过来：记录先落库（`add_checkin` 里一次网络请求都没有），AI 只负责事后
+  补判（`ai::classify_one`）——它只填空着的格子，包括「压根没挂目标」那种。**
+  把模型放到写库之前，界面就得等它，而一条已经发生的事不该因为别人的服务器慢而记不下来。
+  跟着这条走：**新加的判定逻辑进 `ai.rs` 之外的那一层**，别在提示词里再实现一遍规则。
+- **命令的返回值也要管大小写。** Tauri 只对**参数**做 camelCase → snake_case，
+  返回值走 serde 原样序列化——`needs_ai` 在界面上就是 `needs_ai`，不是 `needsAi`。
+  漏了 `#[serde(rename_all = "camelCase")]`，表现是「记录写进去了，但再也没人叫 AI 补判」，
+  而两边都不报错。**CLI 试不出来**：那边没有序列化这一层，只有真窗口能暴露。
+- **密钥明文不出内核。** 落库是密文（`ai::seal`），页面拿到的永远是掩码；
+  渲染时就把掩码定死，别把明文塞进 HTML 再让前端遮。
 - **界面由 Rust 渲染**（`src/render.rs`）。唯一例外是流水行：它要虚拟滚动，所以由 `assets/view.js` 拼装，
   但行的 class 仍然只能来自 `assets/view.css`。
 - **零硬编码颜色**，一律走 CSS 变量；SVG 内部类名必须带 `cv-` 前缀；数字必须 `tabular-nums`。

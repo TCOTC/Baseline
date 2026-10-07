@@ -10,6 +10,9 @@
   --tx:#1c1a17; --tx-2:#6f6a62; --tx-3:#a8a29a; --line:#d8d1c5;
   --ff:"Inter","PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",system-ui,sans-serif;
   --ff-mono:ui-monospace,"Cascadia Mono","SF Mono",Consolas,"Courier New",monospace;
+  /* 系统图标字体。窗口按钮的四个字形（E921/E922/E923/E8BB）和设置的齿轮都从这里来——
+     写成两处的话，换字体时只会改到其中一处。 */
+  --ff-icon:"Segoe Fluent Icons","Segoe MDL2 Assets";
   --blue:#4a6fd4;  --blue-bg:#f0f4ff;  --blue-bd:#dce5fd;  --blue-tx:#2b3f7f;
   --cyan:#0f8f9b;  --cyan-bg:#ecf9fa;  --cyan-bd:#cbe9ec;  --cyan-tx:#0a5560;
   --green:#0f9b7a; --green-bg:#eefaf6; --green-bd:#cdeee2; --green-tx:#0a5f4b;
@@ -88,7 +91,7 @@ body{
 .wbtn{
   flex:none; width:46px; display:grid; place-items:center;
   background:none; border:0; padding:0 0 3px;
-  font-family:"Segoe Fluent Icons","Segoe MDL2 Assets";
+  font-family:var(--ff-icon);
   font-size:10px; line-height:1;
   color:var(--cap-ink);
   cursor:default; outline:none;
@@ -123,16 +126,27 @@ body{
 }
 /* 底边距和输入框的 18px 对齐：左栏的加号和右栏那个框的底边应当落在同一条线上，
    差 4px 眼睛看得出来，而且说不出哪里别扭。 */
+.lfoot{flex:none; display:flex; align-items:center; gap:8px; margin:6px 0 18px}
 .addgoal{
   flex:none; align-self:flex-start;
   display:flex; align-items:center; gap:7px;
-  margin:6px 0 18px; padding:7px 12px 7px 10px;
+  margin:0; padding:7px 12px 7px 10px;
   background:none; border:1px dashed var(--bd-2); border-radius:10px;
   color:var(--tx-3); font:inherit; font-size:12.5px; cursor:default;
 }
 .addgoal svg{display:block; width:11px; height:11px}
 .addgoal:hover{border-color:var(--tx-3); color:var(--tx-2)}
 .addgoal[disabled]{opacity:.45}
+/* 齿轮：和「新建目标」同一排、在它左边。用 Segoe Fluent Icons 的字符而不是自己画 SVG——
+   和顶栏那三个按钮同一个理由（形状与 DPI 缩放交给 Windows，自己画会糊或出台阶）。 */
+.gear{
+  flex:none; width:32px; height:32px; display:flex; align-items:center;
+  justify-content:center; padding:0;
+  background:none; border:1px solid transparent; border-radius:10px;
+  color:var(--tx-3); font-family:var(--ff-icon); font-size:15px; line-height:1;
+  cursor:default; transform:translateZ(0);
+}
+.gear:hover{border-color:var(--bd-2); color:var(--tx-2)}
 .addgoal[disabled]:hover{border-color:var(--bd-2); color:var(--tx-3)}
 
 /* 右栏：一条流水 + 底部输入框。
@@ -252,7 +266,6 @@ body{
   padding:2px 2px 8px;
 }
 .composer .rules[hidden]{display:none}
-.composer .rules-h{font-size:11.5px; color:var(--tx-3); flex:none; margin-right:2px}
 .composer .rules-list{display:flex; align-items:center; flex-wrap:wrap; gap:6px}
 /* 有多个目标时才写目标名，否则它就是噪音——下面那排目标气泡里已经亮着它了。 */
 .composer .rgroup{font-size:11px; color:var(--ctx); font-weight:650; flex:none;
@@ -460,6 +473,10 @@ a.card:focus-visible{outline:2px solid var(--c);outline-offset:2px}
 /* 挂着但这条规则不接受手工记录：虚线 + 说明。挂着 ≠ 计分。 */
 .chip.noscore{border-style:dashed;background:transparent;color:var(--tx-3)}
 .chip.noscore::after{content:"·不计入";opacity:.75}
+/* 后台补判还没回来：既不说计入也不说不计入——那两句话此刻都还不成立。
+   状态属于这一条记录，所以画在它的标签上，不画在输入框里。 */
+.chip.pending{border-style:dashed;background:transparent;color:var(--tx-3)}
+.chip.pending::after{content:"·分类中";opacity:.75}
 
 .nogoal{padding:2px 2px 10px;color:var(--tx-3);font-size:13px;line-height:1.9}
 
@@ -558,6 +575,29 @@ a.card:focus-visible{outline:2px solid var(--c);outline-offset:2px}
 .dsec h3{font-size:12.5px; font-weight:700; color:var(--tx-2); margin-bottom:8px}
 .dsec h3 span{font-weight:400; color:var(--tx-3); margin-left:6px}
 .dwhy{margin-top:8px; font-size:13px; color:var(--tx-2); line-height:1.7}
+
+/* 设置页：单栏、自己滚。**不复用 .panes 那个两栏网格**——设置只有一栏，
+   套上去会在右边留一大片空白，看起来像内容没加载出来。 */
+.settings{flex:1; min-height:0; overflow-y:auto; overflow-x:hidden;
+  padding:22px 30px 60px; scrollbar-gutter:stable}
+.settings .dsec{max-width:620px; margin-bottom:34px}
+.settings .dsec:last-child{margin-bottom:0}
+.settings .dacts{margin-top:20px}
+/* 字段下面那句说明。比 .hint 更贴字段，所以更小、更近。 */
+.fhint{margin-top:6px; font-size:11.5px; color:var(--tx-3); line-height:1.7}
+.fhint code{font-family:var(--ff-mono); font-size:11px; background:var(--sf-2);
+  padding:1px 4px; border-radius:4px}
+.frow{display:flex; align-items:center; gap:8px}
+.frow button{flex:none; background:none; border:1px solid var(--bd-2); border-radius:10px;
+  padding:8px 12px; font:inherit; font-size:12.5px; color:var(--tx-3); cursor:default}
+.frow button:hover{border-color:var(--rose); color:var(--rose-tx)}
+.frow button[disabled]{opacity:.4}
+.frow button[disabled]:hover{border-color:var(--bd-2); color:var(--tx-3)}
+.frow button.armed{border-color:var(--rose); color:var(--rose-tx)}
+/* 滑块：用目标色，和页面上其他可操作的东西一个调子。 */
+.settings input[type=range]{width:100%; accent-color:var(--blue); height:22px; padding:0}
+.hint.bad{color:var(--rose-tx); background:var(--rose-bg); border-left:3px solid var(--rose);
+  border-radius:0 8px 8px 0; padding:9px 12px; font-size:12px}
 
 .rule{display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
   padding:10px 0; border-bottom:1px solid var(--bd)}

@@ -252,8 +252,11 @@ mod tests {
     }
 
     /// 记一条并补快照 —— 和 CLI、窗口走的是同一条路（归属 → 落库 → 重算）。
+    ///
+    /// `defer` 一律给 false：测试里要的是「说不清就拒绝」这条硬规矩，
+    /// 「挂空着等 AI」是窗口和 CLI 的选择，由它们各自传 true。
     fn record(conn: &Connection, goal_ids: &[i64], picks: &[(i64, i64)], day: &str, note: &str) {
-        let links = db::resolve_links(conn, goal_ids, picks).unwrap();
+        let links = db::resolve_links(conn, goal_ids, picks, false).unwrap();
         db::checkin_add(conn, &links, day, "10:00", 1.0, note, TODAY).unwrap();
         roll(conn, d(TODAY)).unwrap();
     }
@@ -281,10 +284,34 @@ mod tests {
         add_manual(&conn, g, "做完一章题");
 
         // 两条都能收它 —— 拒绝，而且一个字都不该落库。
-        let err = db::resolve_links(&conn, &[g], &[]).unwrap_err().to_string();
+        let err = db::resolve_links(&conn, &[g], &[], false)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("读完一章"), "拒绝语里要带上候选：{err}");
         assert!(err.contains("做完一章题"), "拒绝语里要带上候选：{err}");
         assert_eq!(value_today(&conn, g, d(TODAY)).unwrap(), 0.0);
+    }
+
+    /// 说不清时还有另一种处置：**先挂空着写下来**。
+    ///
+    /// 窗口和 CLI 在有 AI 兜底时走这条——一条已经发生的事不该卡在这儿，
+    /// 由 `ai::classify_pending` 事后补，或者由人在详情页指认。
+    #[test]
+    fn 说不清也可以先挂空着写下来() {
+        let conn = db::open_memory().unwrap();
+        let (g, _) = goal_with(&conn, "计算机基础", SourceKind::ManualCheckin, "读完一章");
+        add_manual(&conn, g, "做完一章题");
+
+        let links = db::resolve_links(&conn, &[g], &[], true).unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].source_id, None, "挂空着，等补判");
+        assert!(!links[0].by_ai, "还没判呢，不能先说是 AI 定的");
+
+        // 落库之后它确实「没进曲线」，而且能查到是一条待办。
+        db::checkin_add(&conn, &links, TODAY, "10:00", 1.0, "读了点东西", TODAY).unwrap();
+        assert_eq!(value_today(&conn, g, d(TODAY)).unwrap(), 0.0);
+        assert_eq!(db::unattributed_of(&conn, g).unwrap().len(), 1);
+        assert_eq!(db::unattributed_count(&conn, g).unwrap(), 1);
     }
 
     #[test]
@@ -312,9 +339,9 @@ mod tests {
         let (b, _) = goal_with(&conn, "计算机基础", SourceKind::ManualCheckin, "读完一章");
 
         // 拿 A 的规则去给挂在 B 上的记录记账 —— 不能允许。
-        assert!(db::resolve_links(&conn, &[b], &[(b, sa)]).is_err());
+        assert!(db::resolve_links(&conn, &[b], &[(b, sa)], false).is_err());
         // 目标本身不在这次记录里，也不能给它指定。
-        assert!(db::resolve_links(&conn, &[a], &[(b, sa)]).is_err());
+        assert!(db::resolve_links(&conn, &[a], &[(b, sa)], false).is_err());
     }
 
     #[test]
@@ -510,7 +537,7 @@ mod tests {
         let (a, sa) = goal_with(&conn, "英语", SourceKind::ManualCheckin, "复习记录");
         let (b, sb) = goal_with(&conn, "计算机基础", SourceKind::ManualCheckin, "读完一章");
 
-        let links = db::resolve_links(&conn, &[a, b], &[(a, sa), (b, sb)]).unwrap();
+        let links = db::resolve_links(&conn, &[a, b], &[(a, sa), (b, sb)], false).unwrap();
         db::checkin_add(&conn, &links, TODAY, "10:00", 1.0, "读完 CSAPP 第 3 章", TODAY).unwrap();
         roll(&conn, d(TODAY)).unwrap();
 

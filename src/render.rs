@@ -18,6 +18,7 @@ use chrono::{Datelike, NaiveDate, Weekday};
 use rusqlite::Connection;
 use serde_json::json;
 
+use crate::ai;
 use crate::db;
 use crate::metrics::{self, GoalSeries};
 use crate::model::Goal;
@@ -80,6 +81,11 @@ fn composer_html(conn: &Connection, goals: &[Goal]) -> Result<String> {
         .to_string()
         .replace('<', "\\u003c");
 
+    // AI 能不能用，决定「没选规则」要不要在本地拦下：
+    // 能用就放行，让内核去问模型；不能用才拦，省一次没必要的往返。
+    let ai_cfg = ai::config(conn)?;
+    let ai_on = ai_cfg.ready();
+
     let mut chips = String::new();
     let mut menu = String::new();
     for g in goals {
@@ -115,18 +121,23 @@ fn composer_html(conn: &Connection, goals: &[Goal]) -> Result<String> {
         r#"
       <form class="composer" id="composer" autocomplete="off">
         <input type="hidden" id="composer-goals" value="">
+        <!-- AI 能不能用，界面得知道：能用就**不要**在本地拦下「没选规则」的提交，
+             否则模型永远没机会回答——而那正是这个功能的全部意义。
+             不能用才拦，省一次没必要的往返。 -->
+        <input type="hidden" id="composer-ai" value="{ai_on}">
         <div class="gmenu" id="gmenu" hidden>
           <div class="gmenu-h">这条记录推进了哪些目标？<span>可以多选，也可以一个都不选</span></div>
           {menu}
         </div>
+        <!-- 规则气泡在输入框**外面**、它的上面，左对齐，和下面那排目标气泡分成两层：
+             上面是「这条记录算在哪条规则上」，下面是「它推进了哪些目标」。
+             不弹浮层——浮层会盖住流水，而这件事需要在打字的时候一直看得见。
+             **不加标题。** 气泡里写的就是规则本身，摆在那儿就看得懂；
+             再顶一行「算哪条规则？」是替用户念了一遍他已经看明白的事。 -->
+        <div class="rules" id="rules" hidden>
+          <div class="rules-list" id="rules-list"></div>
+        </div>
         <div class="box">
-          <!-- 规则气泡在输入区**上面**、左对齐，和下面那排目标气泡分成两层：
-               上面是「这条记录算在哪条规则上」，下面是「它推进了哪些目标」。
-               不弹浮层——浮层会盖住流水，而这件事需要在打字的时候一直看得见。 -->
-          <div class="rules" id="rules" hidden>
-            <div class="rules-h">算哪条规则？</div>
-            <div class="rules-list" id="rules-list"></div>
-          </div>
           <textarea id="composer-input" rows="2" maxlength="500"
                     placeholder="刚做了什么？" aria-label="记一条"></textarea>
           <div class="crow">
@@ -140,6 +151,7 @@ fn composer_html(conn: &Connection, goals: &[Goal]) -> Result<String> {
         menu = menu,
         chips = chips,
         rules_json = rules_json,
+        ai_on = if ai_on { "1" } else { "0" },
     ))
 }
 
@@ -150,10 +162,13 @@ fn composer_html(conn: &Connection, goals: &[Goal]) -> Result<String> {
 /// 而每张卡片底部永远印着那条规则本身。数量的多少不是那条分界线。
 fn addgoal_html() -> String {
     r#"
-      <button type="button" class="addgoal" id="addgoal">
-        <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <span>新建目标</span>
-      </button>"#
+      <div class="lfoot">
+        <button type="button" class="gear" id="gear" title="设置（AI 判定）" aria-label="设置">&#xE713;</button>
+        <button type="button" class="addgoal" id="addgoal">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span>新建目标</span>
+        </button>
+      </div>"#
         .to_string()
 }
 
@@ -476,8 +491,12 @@ fn rows_json(
                     "title": g.title,
                     "color": g.color,
                     "counts": l.counts(),
+                    // 这条归属是模型挑的。**不进可见文本**（流水上每一行都挂个「AI 选的」
+                    // 会把那句话变成噪音），但悬停能拿到：快照过了今天就冻住，
+                    // 一条归错的记录事后改不回来，「谁定的」这个事实不该消失。
+                    "byAi": l.by_ai,
                 }),
-                None => json!({ "title": "（已删除）", "color": "none", "counts": false }),
+                None => json!({ "title": "（已删除）", "color": "none", "counts": false, "byAi": false }),
             })
             .collect();
         let text = if c.note.trim().is_empty() {
@@ -506,7 +525,9 @@ fn rows_json(
         };
 
         rows.push(json!({
-            "k": "e", "time": c.time, "text": text, "sub": sub,
+            // 记录 id 是给界面用的：后台补判回来时要能**只改这一行**，
+            // 而不是整页重来（整页重来会打断正在写的下一条）。
+            "k": "e", "id": c.id, "time": c.time, "text": text, "sub": sub,
             "goals": chips,
         }));
     }
@@ -595,13 +616,26 @@ fn detail_body(conn: &Connection, today: NaiveDate, g: &Goal) -> Result<String> 
         let loose = db::unattributed_count(conn, g.id)?;
         if loose > 0 {
             let msg = if manual_n > 1 {
-                format!(
-                    "有 {loose} 条记录没归到任何规则，所以没进曲线——这个目标下有两条以上规则，得说清每条记录算哪一条。"
-                )
+                format!("有 {loose} 条记录没归到规则，所以没进曲线。这个目标下有多条规则，每条记录要算哪一条得指认。")
             } else {
                 format!("有 {loose} 条记录没归到规则，所以没进曲线。")
             };
-            rules.push_str(&format!(r#"<div class="hint warn">{}</div>"#, esc(&msg)));
+            // AI 开着就给一个「补判」的出口。**没有这个出口就是一个死胡同**：
+            // 记录已经落库了，而界面上没有任何地方能把它指认到某条规则上——
+            // 当初「写之前先问模型」的那个设计一旦答不上来，留下的正是这个局面。
+            let retry = if ai::config(conn)?.ready() {
+                format!(
+                    r#"<button type="button" class="addrule airetry" data-goal="{}">让 AI 判这 {} 条</button>"#,
+                    g.id, loose
+                )
+            } else {
+                String::new()
+            };
+            rules.push_str(&format!(
+                r#"<div class="hint warn">{}{}</div>"#,
+                esc(&msg),
+                retry
+            ));
         }
     }
 
@@ -725,28 +759,141 @@ fn detail_body(conn: &Connection, today: NaiveDate, g: &Goal) -> Result<String> 
     ))
 }
 
+// ------------------------------------------------------------ 设置
+
+/// 设置页。目前只有 AI 判定那一组。
+///
+/// **这一页的话是说给人听的，不是给改代码的人听的。** 别把「为什么这样设计」
+/// 「这个方案的代价是什么」搬上来——那是 README 的地方。这里只回答两件事：
+/// 这个开关干什么、这个输入框填什么。
+///
+/// **密钥的明文永远不进这一页。** 页面是 HTML，会被截图、会被复制、会留在滚动记录里，
+/// 所以这里只画掩码；要换密钥就填一把新的，留空表示不动。
+fn settings_body(conn: &Connection) -> Result<String> {
+    let cfg = ai::config(conn)?;
+    let masked = cfg.masked_key();
+
+    let broken = if cfg.key_broken {
+        r#"<div class="hint bad">密钥读不出来了，重新填一次就好。</div>"#
+    } else {
+        ""
+    };
+
+    // 开着和关着要说两件不同的事，别用一句「已关闭」糊过去。
+    let (state, blurb) = if cfg.enabled {
+        (
+            "已打开",
+            "一条记录如果有两条规则都说得通，让 AI 帮你挑一条。它只在你写的规则里挑，拿不准就问你。",
+        )
+    } else {
+        ("已关闭", "一条记录如果有两条规则都说得通，会问你自己选哪一条。")
+    };
+
+    Ok(format!(
+        r#"
+<div class="detail">
+  <header class="hero">
+    <div class="hero-top">
+      <div>
+        <a class="back" href="/">← 返回主页</a>
+        <div class="dtitle">设置</div>
+      </div>
+    </div>
+  </header>
+
+  <div class="settings">
+    <section class="dsec">
+      <h3>AI 判定<span>{state}</span></h3>
+      <p class="dwhy">{blurb}</p>
+      {broken}
+
+      <div class="field">
+        <label for="ai-base">接口地址</label>
+        <input type="text" id="ai-base" value="{base}" placeholder="{def_base}" spellcheck="false">
+        <div class="fhint">OpenAI 兼容的地址。DeepSeek、OpenAI、Moonshot、本机跑的模型都行。</div>
+      </div>
+
+      <div class="field">
+        <label for="ai-model">模型</label>
+        <input type="text" id="ai-model" value="{model}" placeholder="{def_model}" spellcheck="false">
+      </div>
+
+      <div class="field">
+        <label for="ai-key">API 密钥</label>
+        <div class="frow">
+          <input type="password" id="ai-key" value="" placeholder="{key_ph}" autocomplete="off" spellcheck="false">
+          <button type="button" id="ai-key-clear"{clear_disabled}>清掉</button>
+        </div>
+        <div class="fhint">只存在这台电脑上，不会发到别处。留空就是不改动现在这把。</div>
+      </div>
+
+      <div class="field">
+        <label for="ai-th">多大把握才自动选 <b id="ai-th-v">{th}</b></label>
+        <input type="range" id="ai-th" min="0" max="100" step="5" value="{th}">
+        <div class="fhint">没到这个把握就不替你决定，改成问你。定得越高，自动决定的越少。</div>
+      </div>
+
+      <div class="dacts">
+        <button type="button" id="ai-save">保存</button>
+        <button type="button" id="ai-test">测一下</button>
+        <button type="button" id="ai-toggle">{toggle}</button>
+      </div>
+      <div class="hint" id="ai-msg"></div>
+    </section>
+  </div>
+</div>"#,
+        state = state,
+        blurb = blurb,
+        broken = broken,
+        base = esc(&cfg.base_url),
+        def_base = ai::DEFAULT_BASE_URL,
+        model = esc(&cfg.model),
+        def_model = ai::DEFAULT_MODEL,
+        key_ph = if masked.is_empty() {
+            "还没填".to_string()
+        } else {
+            format!("现在是 {masked}")
+        },
+        clear_disabled = if masked.is_empty() { " disabled" } else { "" },
+        th = cfg.threshold,
+        // 一个按钮干一件事，而且说得出口它下一步会做什么。
+        // 关掉之后按钮写着「打开」——比一个灰着的「关掉」有用。
+        toggle = if cfg.enabled {
+            "关掉 AI 判定"
+        } else {
+            "打开 AI 判定"
+        },
+    ))
+}
+
 // ------------------------------------------------------------ 主入口
+
+/// 这一屏显示什么。窗口只有一个「页面」，三种状态由它区分。
+///
+/// 设置页和详情页一样走**服务端路由**（`?settings=1`）：整页由 Rust 一次渲染完成，
+/// JS 里不需要第二套模板——密钥的掩码也因此在渲染时就定死了，明文不出内核。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Main,
+    Goal(i64),
+    Settings,
+}
 
 /// 渲染一屏。
 ///
-/// `goal` 为 `Some(id)` 时渲染这个目标的详情页（整个窗口只显示它），
-/// 否则渲染主视图。详情页走的是**服务端路由**（`?goal=N`）——
-/// 于是「只显示一个目标」不需要在 JS 里再维护一套模板，Rust 仍然是唯一的渲染处。
-pub fn render(
-    conn: &Connection,
-    today: NaiveDate,
-    chrome: Chrome,
-    goal: Option<i64>,
-) -> Result<String> {
+/// 详情页与设置页都走服务端路由（`?goal=N` / `?settings=1`）——
+/// 于是「只显示这一个」不需要在 JS 里再维护一套模板，Rust 仍然是唯一的渲染处。
+pub fn render(conn: &Connection, today: NaiveDate, chrome: Chrome, view: View) -> Result<String> {
     let goals = db::goal_list(conn, false)?;
     let goal_map: HashMap<i64, Goal> = goals.iter().map(|g| (g.id, g.clone())).collect();
     let source_map = source_map(conn)?;
 
     // 目标不存在（链接过期、被删了）就退回主视图，不要给一页空白。
-    let focused = match goal {
-        Some(id) => goals.iter().find(|g| g.id == id).cloned(),
-        None => None,
+    let focused = match view {
+        View::Goal(id) => goals.iter().find(|g| g.id == id).cloned(),
+        _ => None,
     };
+    let on_settings = view == View::Settings;
 
     let (bar, win_title, composer, addgoal) = match chrome {
         // 无边框窗口的标题栏、任务栏、Alt-Tab 都跟着文档标题走。
@@ -762,7 +909,9 @@ pub fn render(
         Chrome::File => ("", format!("基线 · {today}"), String::new(), String::new()),
     };
 
-    let (body, log_json) = if let Some(g) = &focused {
+    let (body, log_json) = if on_settings {
+        (settings_body(conn)?, "[]".to_string())
+    } else if let Some(g) = &focused {
         (
             detail_body(conn, today, g)?,
             rows_json(&db::checkins_of(conn, g.id)?, &goal_map, &source_map, today),
@@ -788,6 +937,31 @@ pub fn render(
           点开它们，在「判定规则」里补上。</div>"#,                esc(&no_rule.join("、"))
             )
         };
+
+        // 没关联目标的记录：它们「记下来了，但谁也不动它」。
+        //
+        // 这件事在主视图上原本完全看不出来——流水里那条标签写着「没关联目标」，
+        // 然后就没有然后了。给一个出口，别让它变成死胡同。
+        //
+        // **排在卡片前面**：待办要看得见才有用。卡片是常驻内容，待办清掉就没了，
+        // 把待办压在卡片下面，三张卡片就足够把它顶出折叠线。
+        let loose = db::unlinked_checkins(conn)?.len();
+        let ai_ready = ai::config(conn)?.ready();
+        let unlinked = if loose == 0 {
+            String::new()
+        } else if ai_ready {
+            format!(
+                r#"
+        <div class="warn" id="unlinked-warn">有 <b>{loose}</b> 条记录没关联目标，所以没进任何曲线。<br>
+          <button type="button" class="addrule airetry">让 AI 判这 {loose} 条</button></div>"#
+            )
+        } else {
+            format!(
+                r#"
+        <div class="warn" id="unlinked-warn">有 <b>{loose}</b> 条记录没关联目标，所以没进任何曲线。<br>
+          记一条的时候在下面点一下目标；或者在设置里打开 AI 判定，让它替你归。</div>"#
+            )
+        };
         // 左栏空了的时候不留一片白：告诉他一件事该怎么做，而且这件事就在手边。
         let nogoal = if goals.is_empty() {
             r#"<div class="nogoal">还没有目标。<br>点左下角的「新建目标」——建的时候要一并写清「什么算推进它」，不然那条曲线永远不会动。</div>"#
@@ -799,7 +973,7 @@ pub fn render(
                 r#"
   <div class="cols">
     <div class="left">
-      <div class="goals">{nogoal}{cards}{warn}</div>{addgoal}
+      <div class="goals">{nogoal}{unlinked}{cards}{warn}</div>{addgoal}
     </div>
     <div class="right">
       <div class="log" id="log"><div class="log-canvas" id="log-canvas"><div class="log-rows" id="log-rows"></div></div></div>{composer}
@@ -809,6 +983,7 @@ pub fn render(
                 nogoal = nogoal,
                 cards = cards,
                 warn = warn,
+                unlinked = unlinked,
                 addgoal = addgoal,
                 composer = composer,
             ),

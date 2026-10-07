@@ -98,13 +98,30 @@
     // 一条记录可以挂多个目标。挂着的都列出来；`counts` 为假表示这条规则
     // 不接受手工记录——标签画成虚线并说明，免得以为它推动了那条线。
     var tags = (r.goals || []).map(function (g) {
-      var no = g.counts ? '' : ' noscore';
-      var tip = g.counts ? '' : '这条规则不接受手工记录，记了也不动这条线';
-      return '<span class="chip ' + esc(g.color) + no + '"' +
+      // 补判还没回来时不下结论：既不说「计入」，也不说「不计入」——
+      // 那两句话此刻都还不成立，说了就是把没定的事说成定了。
+      var no = (g.counts || r.aiwait) ? '' : ' noscore';
+      var wait = r.aiwait ? ' pending' : '';
+      // 悬停里说清两件事：这条规则收不收手工记录，以及这条归属是谁定的。
+      // 后者不进可见文本——每行都挂一句「AI 选的」会变成噪音，但快照过了今天就冻住，
+      // 一条归错的记录事后改不回来，这个事实不该消失。
+      var tip = g.counts
+        ? (g.byAi ? 'AI 挑的规则' : '')
+        : '这条规则不接受手工记录，记了也不动这条线';
+      return '<span class="chip ' + esc(g.color) + no + wait + '"' +
         (tip ? ' title="' + esc(tip) + '"' : '') + '>' + esc(g.title) + '</span>';
     }).join('');
     var none = tags ? '' : ' unlinked';
-    if (!tags) tags = '<span class="chip none">没关联目标</span>';
+    if (!tags) {
+      tags = r.aiwait
+        ? '<span class="chip none pending">还没关联目标</span>'
+        : '<span class="chip none">没关联目标</span>';
+    }
+    // 补判的状态写在**这一行**上。以前它写在输入框里（占位符变成「AI 正在分类…」，
+    // 框还描红），那是把一条记录的状态安在了下一条记录的位置上。
+    var sub = r.sub;
+    if (r.aiwait) sub += ' • AI 正在分类…';
+    else if (r.ainote) sub += ' • ' + r.ainote;
     return '<div class="entry' + none + '">' +
       '<div class="time">' + esc(r.time) + '</div>' +
       '<div class="rail"><span class="dot ' + esc((r.goals[0] || {}).color || 'none') +
@@ -112,8 +129,21 @@
       '<div class="body"><div class="act" title="' + esc(r.text) + '">' + esc(r.text) + '</div>' +
       // 规则名可能很长，而行高是定死的（虚拟滚动靠它算偏移），所以这里只显示一行、
       // 超长省略，全文挂在 title 上——和上面那句备注同一个规矩。
-      '<div class="sub" title="' + esc(r.sub) + '">' + esc(r.sub) + '</div></div>' +
+      '<div class="sub" title="' + esc(sub) + '">' + esc(sub) + '</div></div>' +
       '<div class="tags">' + tags + '</div></div>';
+  }
+
+  /// 改一行的显示状态，然后重画。**只动这一行，不整页重来**——
+  /// 后台的补判不该把用户正在写的下一条冲掉。
+  function patchRow(id, wait, note) {
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].k !== 'e' || rows[i].id !== id) continue;
+      rows[i].aiwait = !!wait;
+      if (note) rows[i].ainote = note;
+      lastKey = ''; // 可见范围没变、内容变了，缓存那个判断会让我们什么都不画
+      paint();
+      return;
+    }
   }
 
   function build() {
@@ -212,6 +242,15 @@
     } catch (e) {
       report('composer-rules', e);
     }
+
+    // AI 能不能用。能用就**不要在本地拦下「没选规则」的提交**——
+    // 拦下来模型就永远没机会回答，而「不选也能记」正是这个功能的全部意义。
+    var aiOn = (($('composer-ai') || {}).value === '1');
+
+    // 存在 sessionStorage 里的两件东西。用 session 而不是 URL 或 localStorage：
+    // 它们天生是「这一趟的事」——补判的待办做完就没用了，草稿也不该活过这次运行。
+    var DRAFT = 'bl:draft';
+    var AIQ = 'bl:aiq';
 
     // 默认两行、随内容长高。
     var MAX_H = 160;
@@ -392,18 +431,21 @@
       form.classList.remove('busy');
       input.disabled = false;
       report('add_checkin', e);
+      // 失败原因是「规则没定」时，把那排气泡也点亮——不然只有输入框描红，
+      // 该动手的地方却安安静静。
+      if (missingPick()) light(rules);
       hint('没记上：' + ((e && e.message) || e));
     }
 
     function send() {
       var text = input.value.trim();
       if (!text || form.classList.contains('busy')) return;
-      // 两条规则都能收这条记录时必须先指认：内核会拒绝，但让它先拒绝一次
-      // 等于「点完了才知道」，而这条界线本来就该在点之前说。
-      if (missingPick()) {
+      // 两条规则都能收这条记录时必须先指认，但**只在没人接手的时候**才拦：
+      // AI 能用就放它过去——内核会先落库，界面回头再叫它补判。
+      if (missingPick() && !aiOn) {
         refreshRules();
         light(rules); // 要动手的是这排气泡，让它自己说话
-        hint('这条记录算哪条规则？先在上面选一条');
+        hint('选一条规则再记');
         return;
       }
       form.classList.add('busy');
@@ -412,13 +454,92 @@
       var picks = [];
       Object.keys(picked).forEach(function (g) { picks.push([Number(g), picked[g]]); });
       invoke('add_checkin', { goalIds: ids().map(Number), note: text, picks: picks })
-        .then(function () {
-          // 提交后整页重来：Rust 会重算今天的快照，流水重新落到底、输入框重新聚焦。
-          // 不做局部插入——那样「卡片上的数字」和「曲线末端」就要在两边各算一次。
+        .then(function (r) {
+          // 记录已经落库了，立刻重来让人看见。**要补判的留给下一次加载**：
+          // 这一次要是等模型，就又变回「点了没反应，过一会儿才刷新」。
+          try {
+            if (r && r.needsAi) sessionStorage.setItem(AIQ, String(r.id));
+          } catch (e) { /* 存不下只是这次不自动补判，记录照样在 */ }
           location.reload();
         })
         .catch(fail);
     }
+
+    // ---- 补判：上一次记完留下的待办 ----
+    //
+    // 记录先落库、立刻可见，所以这一步**没有时间压力**：成了就把归属补上，
+    // 不成那条记录也还在，列表上还能再叫它一次。
+    //
+    // **状态写在那一条记录上，输入框一概不碰。** 这一趟可能是几秒、也可能超时，
+    // 期间人大概率已经在写第二条了——把「正在分类」塞进输入框，
+    // 等于用下一条记录的位置去播上一条的状态。
+    function drainAiQueue() {
+      var id = null;
+      try {
+        id = sessionStorage.getItem(AIQ);
+        sessionStorage.removeItem(AIQ);
+      } catch (e) { report('ai-queue', e); }
+      if (!id) return;
+      id = Number(id);
+      patchRow(id, true);
+
+      // 这一条此刻确实「没关联目标」，但它是**正在办**的待办，不是积压。
+      // 那个「有 N 条没关联目标」的提示把它一起数进去就是句不准确的话——
+      // 先收起来，判成了整页重来它会自己消失，判不成再放回去（那时它是真的还悬着）。
+      var unwarn = $('unlinked-warn');
+      if (unwarn) unwarn.hidden = true;
+
+      invoke('classify_checkin', { checkinId: id })
+        .then(function (msg) {
+          if (msg && msg.indexOf('归了') > -1) {
+            // 归属落库了，卡片上的数字和曲线都跟着变 —— 只能整页重来，
+            // 界面上没有第二份渲染能算出那条曲线。
+            keepDraft();
+            location.reload();
+          } else {
+            // 没判出来是正常结果，不是错误：那面标签本来就写着「·不计入」。
+            patchRow(id, false, 'AI 没判出来');
+            if (unwarn) unwarn.hidden = false;
+          }
+        })
+        .catch(function (e) {
+          patchRow(id, false, 'AI 没判成');
+          if (unwarn) unwarn.hidden = false;
+          report('ai-classify', e);
+        });
+    }
+
+    // 整页重来会把没提交的字丢掉。补判回来时也会重来一次，而那时人很可能
+    // 已经在写下一条了——**连着光标位置一起**存下来，重来之后放回去。
+    // 只回填文字不回填光标，等于把人的光标甩到开头，接着打就会插错地方。
+    function keepDraft() {
+      try {
+        if (input.value.trim()) {
+          sessionStorage.setItem(DRAFT, JSON.stringify({
+            v: input.value,
+            s: input.selectionStart,
+            e: input.selectionEnd
+          }));
+        } else {
+          sessionStorage.removeItem(DRAFT);
+        }
+      } catch (e) { /* 存不下就算了，不该因此挡住记录 */ }
+    }
+
+    function restoreDraft() {
+      try {
+        var raw = sessionStorage.getItem(DRAFT);
+        if (!raw) return;
+        sessionStorage.removeItem(DRAFT);
+        var d = JSON.parse(raw);
+        input.value = d.v || '';
+        grow();
+        if (typeof d.s === 'number') {
+          try { input.setSelectionRange(d.s, d.e); } catch (e) { /* 老引擎不支持就算了 */ }
+        }
+      } catch (e) { /* 同上 */ }
+    }
+    restoreDraft();
 
     form.addEventListener('submit', function (ev) { ev.preventDefault(); send(); });
     // 回车提交、Shift+回车换行。支持多行不该让「写完一句回车」变成按两个键。
@@ -430,6 +551,10 @@
     });
 
     focusComposer();
+    // 补判排在最后：它可能会触发整页重来，而重来之前这一页该初始化完的都初始化完了。
+    // 放在这里而不是启动那一段，是因为它要用输入框的状态（草稿、提示语），
+    // 而那些东西的作用域就在这个函数里。
+    drainAiQueue();
   }
 
   function focusComposer() {
@@ -760,7 +885,11 @@
      一次渲染好了，这里只负责切显隐和把结果发回去。
      所以「一个目标长什么样」仍然只有一处定义。 */
   function initDetail() {
-    var detail = document.querySelector('.detail');
+    // **判据必须是 `data-goal`，不能是 `.detail`。** 设置页共用同一套外壳
+    // （.detail / .hero / .dsec 都是同一份 CSS），只按类名判会把它当成详情页，
+    // 然后在这个页面上找不到 `#etitle` 之类的东西 —— 屏幕上是整页空白，
+    // 而原因看起来像「设置页没渲染」。（踩过，靠 desktop.log 抓到的。）
+    var detail = document.querySelector('.detail[data-goal]');
     if (!detail || !T) return; // 不是详情页，或者不在窗口里
     var id = Number(detail.dataset.goal);
 
@@ -872,6 +1001,119 @@
     };
   }
 
+  // ---------------------------------------------------------------- 设置
+
+  // 「让 AI 判这些」：那些记录已经在库里了，只是还没归好。
+  // 没有这个出口，一次失败的补判就留下一个死胡同——记录取不回来也归不了。
+  //
+  // 两处有它，共用这一段：目标的详情页（那个目标下挂空着的），
+  // 和主视图（**压根没关联目标**的那些）。`data-goal` 空着就是「全库没关联目标的」。
+  function initAiRetry() {
+    Array.prototype.forEach.call(document.querySelectorAll('.airetry'), function (b) {
+      b.onclick = function () {
+        var raw = b.dataset.goal;
+        var was = b.textContent;
+        b.disabled = true;
+        b.textContent = '正在判…';
+        invoke('classify_backlog', { goalId: raw ? Number(raw) : null })
+          .then(function () { location.reload(); })
+          .catch(function (e) {
+            b.disabled = false;
+            b.textContent = was;
+            report('ai-backlog', e);
+          });
+      };
+    });
+  }
+
+  // 齿轮：和详情页一样走**服务端路由**（?settings=1），整页由 Rust 重渲染。
+  // 不在 JS 里切视图——密钥的掩码是渲染时定死的，明文根本到不了这一页。
+  function initGear() {
+    var g = $('gear');
+    if (!g) return;
+    g.onclick = function () { location.href = '?settings=1'; };
+  }
+
+  function initSettings() {
+    var save = $('ai-save');
+    if (!save) return; // 不在设置页
+
+    var th = $('ai-th');
+    if (th) {
+      th.oninput = function () { $('ai-th-v').textContent = th.value; };
+    }
+
+    function msg(text, bad) {
+      var m = $('ai-msg');
+      m.textContent = text || '';
+      m.classList.toggle('bad', !!bad);
+    }
+
+    // 密钥框留空 = 不动现在这把。**空着不能等于清掉**——界面上那个框本来就是空的，
+    // 那样每次保存都会顺手把密钥删了。要删得按「清掉」，而且按两下。
+    function payload(enabled, keyValue) {
+      return {
+        enabled: enabled,
+        baseUrl: $('ai-base').value,
+        model: $('ai-model').value,
+        threshold: Number($('ai-th').value),
+        apiKey: keyValue
+      };
+    }
+
+    function keepKey(enabled) {
+      var v = $('ai-key').value;
+      return payload(enabled, v.trim() === '' ? null : v);
+    }
+
+    save.onclick = function () {
+      msg('');
+      invoke('save_settings', keepKey(true))
+        .then(function () { location.reload(); })
+        .catch(function (e) { msg('没存上：' + ((e && e.message) || e), true); });
+    };
+
+    $('ai-test').onclick = function () {
+      msg('正在测…');
+      // 「测一下」要先把当前填的存下来再测，否则测的是上一次的配置，
+      // 而人以为测的是屏幕上这些字。
+      invoke('save_settings', keepKey(true))
+        .then(function () { return invoke('test_ai', {}); })
+        .then(function (r) { msg(r); })
+        .catch(function (e) { msg('没通：' + ((e && e.message) || e), true); });
+    };
+
+    var toggle = $('ai-toggle');
+    if (toggle) {
+      toggle.onclick = function () {
+        msg('');
+        // 按钮上是「关掉」还是「打开」由渲染时定；点下去就是取反。
+        var on = toggle.textContent.indexOf('关掉') === 0;
+        invoke('save_settings', keepKey(!on))
+          .then(function () { location.reload(); })
+          .catch(function (e) { msg('没改成功：' + ((e && e.message) || e), true); });
+      };
+    }
+
+    var clr = $('ai-key-clear');
+    if (clr) {
+      // 两下：这个动作撤不回来（原来的密钥只在库里存着密文，删了就没了）。
+      var armed = false;
+      clr.onclick = function () {
+        if (!armed) {
+          armed = true;
+          clr.classList.add('armed');
+          clr.textContent = '再点一次';
+          return;
+        }
+        msg('');
+        invoke('save_settings', payload(true, ''))
+          .then(function () { location.reload(); })
+          .catch(function (e) { msg('没清掉：' + ((e && e.message) || e), true); });
+      };
+    }
+  }
+
   // ---------------------------------------------------------------- 启动
 
   try {
@@ -880,6 +1122,15 @@
     initComposer();
     initAddGoal();
     initDetail();
+    initGear();
+    // 补判的重试按钮主视图和详情页都有，所以单独一段，不挂在 initDetail 里面
+    // （那个函数在没有 `data-goal` 的页面上会直接返回，主视图上的按钮就没人接了）。
+    initAiRetry();
+    // 设置页排在 initDetail 之后：它靠 `data-goal` 把自己和详情页分开，
+    // 顺序反过来读起来会以为两者会互相抢。
+    initSettings();
+    // 注意：上一次记完留下的补判待办不在这里跑，它在 initComposer 的末尾——
+    // 那一趟要用到输入框的状态（草稿、提示语），而那些东西的作用域在那边。
     // 每次加载报一行。用来区分「窗口起来了」和「窗口起来了但页面是空的」——
     // 这两种情况从外面看一模一样，处置却完全相反。
     // 两个行数是虚拟滚动的证据：总行数很多，真正进了 DOM 的只有可见的那几十行。

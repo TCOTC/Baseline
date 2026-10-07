@@ -19,3 +19,5 @@ baseline = { path = ".." }
 tauri = { version = "2", features = ["tray-icon"] }
 anyhow = "1"
 chrono = "0.4"
+# 命令的返回值要序列化成 JSON 交给界面（例如「记完了，还有哪几个目标要补判」）。
+serde = { version = "1", features = ["derive"] }

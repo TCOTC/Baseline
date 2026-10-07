@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 use chrono::{Local, NaiveDate};
 
 use baseline::model::SourceKind;
-use baseline::{db, metrics, render};
+use baseline::{ai, db, metrics, render};
 
 #[derive(Parser)]
 #[command(
@@ -34,6 +34,10 @@ struct Cli {
 enum Cmd {
     /// 初始化数据库（幂等）
     Init,
+
+    /// AI 判定（拿不准「算哪条规则」时让模型在你写的规则里挑一条）
+    #[command(subcommand)]
+    Ai(AiCmd),
 
     /// 目标
     #[command(subcommand)]
@@ -85,6 +89,9 @@ enum Cmd {
         /// 只渲染这一个目标的详情页（目标的 id）
         #[arg(long)]
         goal: Option<i64>,
+        /// 渲染设置页（AI 判定那一屏）
+        #[arg(long)]
+        settings: bool,
         /// 带上窗口外壳：自绘顶栏 + 底部输入框，和窗口里看到的一致
         #[arg(long)]
         window: bool,
@@ -92,6 +99,32 @@ enum Cmd {
 
     /// 各目标的当前状态（终端速览）
     Status,
+}
+
+#[derive(Subcommand)]
+enum AiCmd {
+    /// 看现在的配置（密钥只显示掩码）
+    Show,
+    /// 配置 AI 判定。不写的项保持原样
+    Set {
+        /// OpenAI 兼容的接口地址，例如 https://api.deepseek.com/v1
+        #[arg(long)]
+        base_url: Option<String>,
+        /// 模型名，例如 deepseek-chat
+        #[arg(long)]
+        model: Option<String>,
+        /// API 密钥。传空串就是清掉
+        #[arg(long)]
+        key: Option<String>,
+        /// 置信度门槛（0–100）。低于它的答案一律不用
+        #[arg(long)]
+        threshold: Option<u8>,
+        /// 关掉：关掉之后拿不准就一律让你自己选
+        #[arg(long)]
+        off: bool,
+    },
+    /// 发一个最小的请求，看配好没有
+    Test,
 }
 
 #[derive(Subcommand)]
@@ -156,6 +189,57 @@ fn main() -> Result<()> {
             println!("数据库就绪：{}", db_path.display());
             println!("（桌面窗口读的是同一个库）");
         }
+
+        Cmd::Ai(AiCmd::Show) => {
+            let cfg = ai::config(&conn)?;
+            let key = cfg.masked_key();
+            println!("开关      {}", if cfg.enabled { "开" } else { "关" });
+            println!("接口      {}", cfg.base_url);
+            println!("模型      {}", cfg.model);
+            println!("密钥      {}", if key.is_empty() { "（没配）" } else { &key });
+            println!("自动选的把握  {}", cfg.threshold);
+            if cfg.key_broken {
+                println!();
+                println!("⚠ 密钥读不出来了，重新填一次：baseline ai set --key <密钥>");
+            }
+            if !cfg.ready() {
+                println!();
+                println!("现在还不能用。配上密钥：baseline ai set --key <你的密钥>");
+            }
+        }
+
+        Cmd::Ai(AiCmd::Set {
+            base_url,
+            model,
+            key,
+            threshold,
+            off,
+        }) => {
+            let cur = ai::config(&conn)?;
+            ai::save(
+                &conn,
+                if off { false } else { true },
+                base_url.as_deref().unwrap_or(&cur.base_url),
+                model.as_deref().unwrap_or(&cur.model),
+                threshold.unwrap_or(cur.threshold),
+                key.as_deref(),
+            )?;
+            let now_cfg = ai::config(&conn)?;
+            println!("AI 判定已{}", if now_cfg.enabled { "打开" } else { "关闭" });
+            println!("接口  {}", now_cfg.base_url);
+            println!("模型  {}", now_cfg.model);
+            println!(
+                "密钥  {}",
+                if now_cfg.api_key.is_empty() {
+                    "（没配）"
+                } else {
+                    "已设置"
+                }
+            );
+            println!("自动选的把握  {}", now_cfg.threshold);
+        }
+
+        Cmd::Ai(AiCmd::Test) => println!("{}", ai::probe(&conn)?),
 
         Cmd::Goal(GoalCmd::Add { title, why, color }) => {
             // 上限取消了（2026-10-06，他本人的决定）。原来卡 3 个的理由是
@@ -336,33 +420,67 @@ fn main() -> Result<()> {
                 }
             });
             let note = note.unwrap_or_default();
-            // 归属在这一步定：唯一就自动归，两条以上就得用 --source 指认。
+            // 归属在这一步定：人用 --source 指认，唯一能确定的自动归，剩下的挂空着。
             let picks: Vec<(i64, i64)> = match (&g, source) {
                 (Some(g), Some(s)) => vec![(g.id, s)],
                 (None, Some(_)) => anyhow::bail!("--source 要配一个目标一起用"),
                 _ => Vec::new(),
             };
             let ids: Vec<i64> = g.iter().map(|g| g.id).collect();
-            let links = db::resolve_links(&conn, &ids, &picks)?;
+            // 配了 AI 就先挂空着写下来，写完再补判——和窗口里是同一个顺序，
+            // 理由也一样：一条已经发生的事不该卡在网络上。
+            let defer = ai::config(&conn)?.ready();
+            let links = db::resolve_links(&conn, &ids, &picks, defer)?;
             let id = db::checkin_add(&conn, &links, &day, &time, value, &note, &now_s)?;
-            match &g {
-                Some(g) => {
-                    let cur = metrics::value_today(&conn, g.id, today)?;
-                    println!(
-                        "已记录 #{} · {} · {} {} → 当前累计 {}",
-                        id,
-                        g.title,
-                        day,
-                        time,
-                        render::num(cur)
-                    );
+
+            // 补判（CLI 里等它做完就好：命令返回时就该是最终状态）。
+            //
+            // **一条记录一个入口**：挂了目标但没归规则的、压根没挂目标的，都是它。
+            // 后者就是你「不选目标直接记一条」时走的那条路。
+            let mut trouble = None;
+            if defer {
+                let f = ai::classify_one(&conn, id, today)?;
+                trouble = f.trouble;
+            }
+
+            // 后面这些话都要说**最终状态**，所以读库，不读上面那份 `links`——
+            // 那份是补判之前算的，这时候已经过期了。（踩过：它会让
+            // 「AI 刚说归好了」和「未关联目标」同时打印出来。）
+            let now_links = db::links_of(&conn, id)?;
+            println!("已记录 #{id} · {day} {time}");
+
+            if now_links.is_empty() {
+                // 一个目标都没挂上，也没归成——这条记录不进任何曲线。
+                println!("它没有关联目标，所以不进任何曲线。");
+                if !defer {
+                    println!("（在设置里打开 AI 判定，这一步可以交给它。）");
                 }
-                // 没关联的记录不进任何曲线，所以这里没有「当前累计」可说。
-                None => println!(
-                    "已记录 #{} · 未关联目标 · {day} {time}\n\
-                     它不会进任何一条曲线。以后想归到某个目标上，得重新记一条。",
-                    id
-                ),
+            } else {
+                for l in &now_links {
+                    let goal = db::goal_by_id(&conn, l.goal_id)?
+                        .map(|x| x.title)
+                        .unwrap_or_else(|| format!("#{}", l.goal_id));
+                    match l.source_id {
+                        Some(sid) => {
+                            let what = db::sources_of(&conn, l.goal_id)?
+                                .into_iter()
+                                .find(|s| s.id == sid)
+                                .map(|s| s.summary())
+                                .unwrap_or_default();
+                            println!("{goal} → {what}");
+                        }
+                        None => println!("{goal} → 还没归到规则，所以没进这条曲线"),
+                    }
+                }
+                // 「当前累计」只对唯一那个目标说得清；挂了多个就不猜。
+                if let [one] = now_links.as_slice() {
+                    let cur = metrics::value_today(&conn, one.goal_id, today)?;
+                    println!("当前累计 {}", render::num(cur));
+                }
+            }
+            if let Some(t) = trouble {
+                // 记录已经落库了，所以这不是失败，只是「这一条没能自动归」。
+                eprintln!("{t}");
             }
         }
 
@@ -371,7 +489,13 @@ fn main() -> Result<()> {
             println!("快照补齐完成，新写入 {n} 条（已存在的日期未改写）");
         }
 
-        Cmd::Render { out, open, goal, window } => {
+        Cmd::Render {
+            out,
+            open,
+            goal,
+            settings,
+            window,
+        } => {
             // 渲染前顺手补快照，保证曲线是最新的。幂等。
             metrics::roll(&conn, today)?;
             let chrome = if window {
@@ -379,7 +503,16 @@ fn main() -> Result<()> {
             } else {
                 render::Chrome::File
             };
-            let html = render::render(&conn, today, chrome, goal)?;
+            let html = render::render(
+                &conn,
+                today,
+                chrome,
+                match (settings, goal) {
+                    (true, _) => render::View::Settings,
+                    (false, Some(id)) => render::View::Goal(id),
+                    (false, None) => render::View::Main,
+                },
+            )?;
             if let Some(dir) = out.parent() {
                 std::fs::create_dir_all(dir).ok();
             }

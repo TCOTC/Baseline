@@ -115,10 +115,14 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         -- 唯一依据。NULL 表示「我本来想推进它」——不进这条曲线。
         -- 手工打卡的贡献就是「归属到这条来源的记录之和」，判定在 metrics::source_value 里，
         -- 不在这里——这样菜单能列全所有目标。
+        -- `by_ai`：这条归属是模型挑的，不是人挑的。**必须留下来**——
+        -- 快照过了今天就冻住，一条归错的记录事后改不回来，三个月后要能分辨
+        -- 「这是我说的」还是「那是 AI 说的」。
         CREATE TABLE IF NOT EXISTS checkin_goals (
             checkin_id INTEGER NOT NULL REFERENCES checkins(id) ON DELETE CASCADE,
             goal_id    INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
             source_id  INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+            by_ai      INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (checkin_id, goal_id)
         );
         CREATE INDEX IF NOT EXISTS idx_checkin_goals_goal ON checkin_goals(goal_id);
@@ -130,6 +134,14 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             cumulative REAL NOT NULL,
             PRIMARY KEY (goal_id, day)
         );
+
+        -- 设置。目前只有 AI 那几项（见 ai.rs）。放库里而不是另开一个配置文件：
+        -- 「程序在哪、数据在哪」这个问题已经用 default_path 解决过一遍了，
+        -- 再开一个文件就是把它重新打开一次。
+        CREATE TABLE IF NOT EXISTS settings (
+            k TEXT PRIMARY KEY,
+            v TEXT NOT NULL
+        );
         "#,
     )?;
     conn.execute(
@@ -139,10 +151,26 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     relax_checkin_goal(conn)?;
     split_checkin_goals(conn)?;
     move_attribution_to_links(conn)?;
+    add_column_if_missing(conn, "checkin_goals", "by_ai", "INTEGER NOT NULL DEFAULT 0")?;
     // **每次打开都补一遍**，不只在新库上做：给目标补上第一条手工规则之后，
     // 它下面那些原本「没归到任何规则」的记录就此变得唯一可归属。
     // 放在打开时做，CLI / 窗口 / 渲染三个入口就都覆盖到了，不用各自记着调。
     backfill_attribution(conn)?;
+    Ok(())
+}
+
+/// 加一列，已经有了就什么都不做。判据是 `pragma_table_info`，理由同上面几处：
+/// 建表全走 IF NOT EXISTS，版本号区分不开「加过没加过」，而列在不在是事实。
+fn add_column_if_missing(conn: &Connection, table: &str, name: &str, decl: &str) -> Result<()> {
+    let has: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?1"),
+        params![name],
+        |r| r.get(0),
+    )?;
+    if has == 0 {
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {name} {decl};"))
+            .with_context(|| format!("给 {table} 加 {name} 失败"))?;
+    }
     Ok(())
 }
 
@@ -545,13 +573,13 @@ pub fn goals_without_rule(conn: &Connection) -> Result<Vec<Goal>> {
 
 // ---------------------------------------------------------------- Checkin
 
-/// 记一条推进。`links` 是「这条记录推进了哪些目标」，每项是 (目标 id, 归到哪条规则)。
+/// 记一条推进。`links` 是「这条记录推进了哪些目标」，每项是 (目标, 归到哪条规则)。
 ///
 /// 规则可以是 `None`：那是「我本来想推进它」——挂上去了，但不进那条曲线。
 /// 归属由 [`resolve_links`] 算好再传进来，这里不做判断。
 pub fn checkin_add(
     conn: &Connection,
-    links: &[(i64, Option<i64>)],
+    links: &[CheckinLink],
     day: &str,
     time: &str,
     value: f64,
@@ -563,11 +591,11 @@ pub fn checkin_add(
         params![day, time, value, note, now],
     )?;
     let id = conn.last_insert_rowid();
-    for (g, s) in links {
+    for l in links {
         conn.execute(
-            "INSERT OR IGNORE INTO checkin_goals(checkin_id, goal_id, source_id)
-             VALUES (?1, ?2, ?3)",
-            params![id, g, s],
+            "INSERT OR IGNORE INTO checkin_goals(checkin_id, goal_id, source_id, by_ai)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![id, l.goal_id, l.source_id, l.by_ai as i64],
         )?;
     }
     Ok(id)
@@ -576,7 +604,8 @@ pub fn checkin_add(
 /// checkin_id -> 挂着的关联（按 goal_id 排序，渲染顺序才稳定）。
 fn links_by_checkin(conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<CheckinLink>>> {
     let mut stmt = conn.prepare(
-        "SELECT checkin_id, goal_id, source_id FROM checkin_goals ORDER BY checkin_id, goal_id",
+        "SELECT checkin_id, goal_id, source_id, by_ai FROM checkin_goals
+          ORDER BY checkin_id, goal_id",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok((
@@ -584,6 +613,7 @@ fn links_by_checkin(conn: &Connection) -> Result<std::collections::HashMap<i64, 
             CheckinLink {
                 goal_id: r.get(1)?,
                 source_id: r.get(2)?,
+                by_ai: r.get::<_, i64>(3)? != 0,
             },
         ))
     })?;
@@ -697,20 +727,27 @@ pub fn pick_source(conn: &Connection, goal_id: i64) -> Result<Option<i64>> {
 
 /// 把「推进了哪些目标」解析成「每条关联归到哪条规则」。
 ///
-/// `picks` 是人点过的「谁归谁」——每项是 (目标 id, 规则 id)。两种情形会拒绝，
-/// 都是**机械的拒绝**：
+/// - `picks` 是人点过的「谁归谁」（每项是 目标 id, 规则 id）。
+/// - `defer`：说不清时怎么办。
+///
+///   `false` = 现在就拒绝，把候选列出来让人指认。
+///   `true` = **先挂空着写下来**，谁也别在这儿等——之后由 AI 补（`ai::classify_pending`），
+///   或者由人在详情页指认。记录先落库是硬要求：卡在网络上等着，等于让一条已经发生的事
+///   因为别人的服务器慢而记不下来。
+///
+/// 两种情形会拒绝，都是**机械的拒绝**：
 ///
 /// - 指定的规则不属于那个目标：不能靠一个 id 就把记录挂到别人家的规则上；
-/// - 某个目标下有两条以上手工规则，而人没给它指定：这时候说不清它算哪条，
-///   与其替你挑一条，不如让你指认——**这条记录算不算数，只有规则能回答**。
+/// - 某个目标下有两条以上手工规则、而人没指定，且 `defer` 是 false。
 ///
-/// 返回的每项是 (目标 id, 归到哪条规则)。规则为 `None` 不报错：
-/// 那只是「记下了，但不算数」——挂到一条 git 规则的目标上就是这个意思。
+/// 规则为 `None` 不报错：那只是「记下了，但不算数」——
+/// 挂到一条 git 规则的目标上就是这个意思。
 pub fn resolve_links(
     conn: &Connection,
     goal_ids: &[i64],
     picks: &[(i64, i64)],
-) -> Result<Vec<(i64, Option<i64>)>> {
+    defer: bool,
+) -> Result<Vec<CheckinLink>> {
     for (goal_id, source_id) in picks {
         let g_title = goal_by_id(conn, *goal_id)?
             .map(|x| x.title)
@@ -729,34 +766,137 @@ pub fn resolve_links(
     let mut out = Vec::with_capacity(goal_ids.len());
     for g in goal_ids {
         let cands = manual_sources_of(conn, *g)?;
-        let picked = match picks.iter().find(|(gi, _)| gi == g) {
-            Some((_, si)) => Some(*si),
-            None => match cands.len() {
-                1 => Some(cands[0].id),
-                0 => None,
+        let link = if let Some((_, si)) = picks.iter().find(|(gi, _)| gi == g) {
+            CheckinLink {
+                goal_id: *g,
+                source_id: Some(*si),
+                by_ai: false,
+            }
+        } else {
+            match cands.len() {
+                1 => CheckinLink {
+                    goal_id: *g,
+                    source_id: Some(cands[0].id),
+                    by_ai: false,
+                },
+                0 => CheckinLink {
+                    goal_id: *g,
+                    source_id: None,
+                    by_ai: false,
+                },
+                // 两条都能算 —— 挂空着，等 AI 或者等人。
+                _ if defer => CheckinLink {
+                    goal_id: *g,
+                    source_id: None,
+                    by_ai: false,
+                },
                 _ => {
                     let title = goal_by_id(conn, *g)?
                         .map(|x| x.title)
                         .unwrap_or_else(|| format!("#{g}"));
                     bail!("{}", ambiguous_msg(&title, &cands))
                 }
-            },
+            }
         };
-        out.push((*g, picked));
+        out.push(link);
     }
     Ok(out)
 }
 
+/// 一条记录的备注。
+pub fn checkin_note(conn: &Connection, checkin_id: i64) -> Result<String> {
+    Ok(conn.query_row(
+        "SELECT note FROM checkins WHERE id=?1",
+        params![checkin_id],
+        |r| r.get(0),
+    )?)
+}
+
+/// 一条记录**现在**挂着哪些目标、各归到哪条规则。
+///
+/// 和 `resolve_links` 的区别：那个算的是「准备怎么写」，这个是「库里现在是什么」。
+/// 补判之后再想说话就得读这一份——手里那份是补判之前算的，还停在挂空的状态。
+pub fn links_of(conn: &Connection, checkin_id: i64) -> Result<Vec<CheckinLink>> {
+    let mut stmt = conn.prepare(
+        "SELECT goal_id, source_id, by_ai FROM checkin_goals
+          WHERE checkin_id=?1 ORDER BY goal_id",
+    )?;
+    let rows = stmt.query_map(params![checkin_id], |r| {
+        Ok(CheckinLink {
+            goal_id: r.get(0)?,
+            source_id: r.get(1)?,
+            by_ai: r.get::<_, i64>(2)? != 0,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// 这个目标下「挂上来了、还没归到任何规则」的记录：(记录 id, 备注)。
+///
+/// 这是**待办**，不是垃圾：它们等着被 AI 判，或者被人指认。
+pub fn unattributed_of(conn: &Connection, goal_id: i64) -> Result<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.note FROM checkin_goals cg
+           JOIN checkins c ON c.id = cg.checkin_id
+          WHERE cg.goal_id=?1 AND cg.source_id IS NULL
+          ORDER BY c.day, c.time, c.id",
+    )?;
+    let rows = stmt.query_map(params![goal_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// 压根没挂到任何目标上的记录：(记录 id, 备注)。
+///
+/// 「记下来是第一步，归到哪个目标是第二步」——第二步以前只能人工做，
+/// 于是默认一个目标都不选的那条记录就永远躺在流水里，谁也不动它。
+pub fn unlinked_checkins(conn: &Connection) -> Result<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.note FROM checkins c
+          WHERE NOT EXISTS (SELECT 1 FROM checkin_goals g WHERE g.checkin_id = c.id)
+          ORDER BY c.day, c.time, c.id",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// 把一条记录归到某个目标的某条规则上。`by_ai` 记下这是谁定的——见 `model::CheckinLink`。
+///
+/// **upsert**：挂空着的那种是改写已有的一行，压根没挂目标的那些是新建一行。
+/// 两者都是「把归属写上」，分成两个函数迟早会有人只调用其中一个，
+/// 而漏掉的那一半表现是「判完了但没写进去」——静默、且看起来像模型没答上来。
+///
+/// 只写这一条关联，不动别的：重算是调用方的事（`metrics::roll`）。
+pub fn attribute(
+    conn: &Connection,
+    checkin_id: i64,
+    goal_id: i64,
+    source_id: i64,
+    by_ai: bool,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO checkin_goals(checkin_id, goal_id, source_id, by_ai)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(checkin_id, goal_id)
+         DO UPDATE SET source_id = excluded.source_id, by_ai = excluded.by_ai",
+        params![checkin_id, goal_id, source_id, by_ai as i64],
+    )?;
+    Ok(())
+}
+
 /// 歧义时的拒绝语。把候选连同 id 一起列出来，让人不用回头去查就能指认。
+///
+/// 只陈述事实。**不要在这里写行动指引**（「用 --source 指定」之类）——
+/// 同一句话在 CLI 和窗口的输入框里都会出现，而那两个地方该做的事不一样。
 fn ambiguous_msg(goal_title: &str, cands: &[Source]) -> String {
     let list: Vec<String> = cands
         .iter()
         .map(|s| format!("#{} {}", s.id, s.summary()))
         .collect();
     format!(
-        "「{goal_title}」下有 {} 条规则都能收这条记录：{}。它算哪一条得你来定——不替你猜。",
+        "「{goal_title}」下有 {} 条规则都能算这条记录：{}。",
         cands.len(),
-        list.join(" / ")
+        // 用「；」分隔：规则原话里本来就有「，」「、」，再拿它们分隔就分不清哪到哪了。
+        list.join("；")
     )
 }
 
@@ -874,6 +1014,30 @@ pub fn last_snapshot_day(conn: &Connection, goal_id: i64) -> Result<Option<Strin
         )
         .optional()?
         .flatten())
+}
+
+// ---------------------------------------------------------------- 设置
+
+/// 读一条设置。没有就返回 None——**不要在这里编默认值**：
+/// 默认值属于用它的那一项（AI 的默认在 `ai::Config`），塞在这里会变成两份。
+pub fn setting_get(conn: &Connection, k: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT v FROM settings WHERE k=?1", params![k], |r| r.get(0))
+        .optional()?)
+}
+
+pub fn setting_set(conn: &Connection, k: &str, v: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO settings(k, v) VALUES (?1, ?2)
+         ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+        params![k, v],
+    )?;
+    Ok(())
+}
+
+pub fn setting_del(conn: &Connection, k: &str) -> Result<()> {
+    conn.execute("DELETE FROM settings WHERE k=?1", params![k])?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------- 测试

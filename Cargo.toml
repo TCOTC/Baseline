@@ -15,6 +15,12 @@ serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 anyhow = "1"
+# AI 判定要发一个同步的 HTTPS 请求。**不用 reqwest**：它要一个 tokio 运行时，
+# 而这一层从数据库到渲染全是同步的，为了一个请求引入一套异步运行时不划算。
+ureq = { version = "3", features = ["json"] }
+# 存 API 密钥：本地不落明文。见 ai.rs 顶部那段关于「这到底防住了什么」的说明。
+chacha20poly1305 = "0.10"
+getrandom = "0.3"
 
 # 内核是 lib 而不是只藏在 bin 里：CLI 和桌面外壳（src-tauri）都调用同一份。
 # 判定规则、累积口径、快照冻结这些东西一旦有两份实现，两份就会开始不一致。

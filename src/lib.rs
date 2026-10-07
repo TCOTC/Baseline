@@ -14,6 +14,7 @@
 //!
 //! 这一层不知道窗口、不知道命令行、不知道 HTML 之外的表现形式。
 
+pub mod ai;
 pub mod db;
 pub mod metrics;
 pub mod model;
