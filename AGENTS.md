@@ -77,6 +77,73 @@ Invoke-RestMethod http://127.0.0.1:7717/__state | ConvertTo-Json -Depth 4
 随机端口 + 每次启动的 token（首访 `?t=` 换成 HttpOnly cookie）。
 **别为了省事把这两条关掉，也别绑 0.0.0.0。**
 
+## 界面与样式
+
+这一节是硬要求。原则：**样式跟着组件走，值走令牌，装饰能少就少。**
+
+### 命名与 DOM
+
+- 类名一律 BEM：`block__element--modifier`，全小写 kebab-case。
+  block 用「东西」命名（`goal-card` / `settings-tabs` / `log-entry`），
+  不用 `left` / `box` / `wrap` 这种位置名。
+- 元素和状态用 `__element` / `--modifier`；不要 `on`、`active`、`now` 这种裸状态类。
+- 颜色不写类名：容器上写 `data-theme="blue"`，后代读 `--goal-*`。
+- DOM 用语义标签：`main` / `header` / `section` / `article` / `nav` / `time` / `h1`–`h3`；
+  可点整块用 `<a>`，操作用 `<button>`。不用 `div` 堆出本来能语义化的结构。
+- 不加只为了挂样式的包装层；能写在现有元素上的，不再包一层。
+- 虚拟列表只渲染可见行，用真正的行组件（`LogList` + `LogDayRow` / `LogEntryRow`），
+  不拼 `innerHTML` 字符串。
+- 不用内联 `style`；只有动态几何（虚拟滚动偏移等）才允许 `:style`。
+- ARIA 只在原生语义不够时加；`tablist` / `tab` / `tabpanel` 要成对，方向键可用。
+
+### 样式归属
+
+- 组件样式写在 `<style scoped lang="scss">`，不往全局层加类。
+- 全局层只放：`_tokens.scss`（令牌 + `[data-theme]`）、`_base.scss`（重置 + `body` / `#app` + 控件重置）、
+  `index.scss`（入口）。
+- 跨屏重复的东西做成组件（`AppButton` / `AppInput` / `AppTextarea` / `FormField` /
+  `AppSection` / `Notice` / `ActionBar` / `PageShell` / `ToggleChip` / `SourceKindPicker` / `BackLink`），
+  不靠全局类名共享。
+- 同一个视觉规则只写一份；两处出现就抽组件或合并选择器，不复制。
+- `:deep()` 只用于子组件自己表达不了的布局穿透；能加 prop / class 就不 deep。
+
+### 取值
+
+- 颜色、字号、圆角、间距一律走令牌；不写 `#hex`、`12.5px`、`9px` 这种一次性值。
+- 字号 8 档（`--font-size-1..8`）；圆角 3 档（`--radius` / `--radius-lg` / `--radius-pill`）；
+  间距 4 的倍数（`--space-1..6`）。要新值先问「能不能用现有档」。
+- 布局常数（列宽、内容最大宽）可以用字面量，但只写一处：组件内用局部 CSS 变量命名，
+  不让 `720` / `224` 散落在两条规则里。
+- `font-weight` 只有 `bold` / `normal`，不写数字。
+- `line-height` 只在真正参与定位的地方写（大数字盒、图标字形），其余继承 `body` 的 1.55。
+- 数字统一 `font-variant-numeric: tabular-nums`。
+- 1–2px 的描边 / 偏移可以字面量；其余尺寸走 `var(--space-*)` / `var(--font-size-*)`。
+
+### 重置与继承
+
+- `* { margin: 0; padding: 0; box-sizing: border-box }` 已覆盖所有元素；
+  组件里不再写 `padding: 0` / `margin: 0`，除非要覆盖组件自己的默认值。
+- 全局 `button` 只重置字体、光标、背景、边框；不规定 padding / 圆角 / 颜色。
+- 表单控件默认不继承文字色：`input, textarea` 的 `color` 在全局写一次，组件里不重复。
+- 子元素能继承到的 `color` / `font-family` 不重复写，只写与父级不同的那一项。
+
+### 装饰
+
+- 默认不加：阴影、过渡、`letter-spacing`、装饰性 `opacity`、无意义的边框 / 圆角。
+- 圆角只给面（卡片 / 对话框）、输入框、动作按钮、标签；图标按钮和窗口按钮是方角。
+- 禁止「方角 + 左侧一条竖线」的选中 / 提醒样式；选中态用圆角背景或颜色，不画左边条。
+- 窗口按钮必须方角；全局 `button` 不带圆角，避免漏给标题栏。
+- 滚动条：8px 轨道、6px 胶囊滑块、透明轨道、无两端箭头。
+  主内容（流水 / 设置页）的滚动条贴窗口右边缘，内容留白留在滚动容器上；
+  侧栏（目标列 / 设置分类）的滚动条留在侧栏自己的边缘。
+- 不做响应式断点：这是桌面工具，窗口最小 880；窄了让内容自己挤，不改布局。
+
+### 注释
+
+- 只写「现在为什么这样」，不写「以前怎样 / 这次改了什么 / 旧版如何」。
+- 不写「不再是 innerHTML」「全局只有这三样」这类对照历史或数数的句子。
+- 能删的注释就删；保留的只解释不明显的取舍（为什么方角、为什么固定行高、为什么先落库）。
+
 ## 硬约束
 
 - **判定口径只有一份实现。** 就是 `internal/metrics.SourceValue`；记录归属是
@@ -89,20 +156,7 @@ Invoke-RestMethod http://127.0.0.1:7717/__state | ConvertTo-Json -Depth 4
   包括「压根没挂目标」那种。
 - **数字和曲线同源**：`current` 和 `deltaWeek` 都取自快照序列，前端只负责显示。
 - **快照写了不再改写**（`INSERT OR IGNORE`），只有今天例外、每次重算。
-- **界面由 Vue 渲染，样式分两层。** `web/src/styles/` 只放必须全局的东西：
-  令牌（`_tokens.scss`）、重置（`_base.scss`）、调色板（`[data-theme]` 只能靠继承）。
-  其余全部写在组件的 `<style scoped lang="scss">` 里；跨屏复用做成组件
-  （`AppButton` / `FormField` / `AppSection` / `Notice` / `PageShell` / `ToggleChip`），
-  不用全局类名共享。流水是 Vue 虚拟列表（`LogList` + `LogDayRow` +
-  `LogEntryRow`），只渲染可见的几十行，行样式也在组件里。
-  零硬编码颜色，一律走 CSS 变量；字号 / 圆角 / 间距走 `--font-size-*` / `--radius-*` / `--space-*`，
-  **不要再写 12.5px、9px 这种一次性取值**；数字 `tabular-nums`。
-  **`font-weight` 只有 `bold` / `normal` 两档，不写数字字重**——字重的细微差别看不出来，
-  只会让「谁该强调」变得含糊。
-  **`line-height` 只在真正参与定位的地方写**（大数字盒、图标字形），其余继承 body 的 1.55；
-  逐处调行高是最容易失控的一种「微调」。
-  **全局 `button` 不带圆角**：窗口按钮是方角（Windows 标题栏就是这样），圆角只给动作按钮。
-  **没有响应式断点**：这是桌面工具，窗口最小 880；浏览器验证也在这个宽度以上。
+- **界面改动的硬要求见《界面与样式》**：命名、DOM、样式归属、取值、重置、装饰、注释都按那一节执行。
 - **mutation 之后重取整个 view model**（`GET /api/view`），不做乐观更新。
   卡片上的数字、曲线末端、流水行必须来自同一次计算。
 - **密钥明文不出内核。** 落库是密文，页面拿到的永远是掩码；掩码在 Go 里定死。
