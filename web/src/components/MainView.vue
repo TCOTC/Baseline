@@ -59,21 +59,21 @@ function onCreated() {
     <section class="main-view__goals-column" aria-label="目标">
       <div class="main-view__goals">
         <p v-if="!page.goals.length" class="main-view__empty">
-          还没有目标。<br />点左下角的「新建目标」——建的时候要一并写清「什么算推进它」，不然那条曲线永远不会动。
+          暂无目标。<br />点击左下角「新建目标」创建。创建时需填写判定规则，否则曲线不会更新。
         </p>
 
         <!-- 待办排在卡片前面：它要看得见才有用。 -->
         <Notice v-if="unlinked" id="unlinked-warn" tone="warning">
-          有 <b>{{ unlinked.count }}</b> 条记录没关联目标，所以没进任何曲线。<br />
+          有 <b>{{ unlinked.count }}</b> 条记录未关联目标，未计入任何曲线。<br />
           <AppButton
             v-if="unlinked.aiRetry"
             variant="dashed"
             :disabled="retrying"
             @click="retry"
           >
-            {{ retrying ? '正在判…' : `让 AI 判这 ${unlinked.count} 条` }}
+            {{ retrying ? '判定中…' : `由 AI 判定 ${unlinked.count} 条` }}
           </AppButton>
-          <template v-else>记一条的时候在下面点一下目标；或者在设置里打开 AI 判定，让它替你归。</template>
+          <template v-else>记录时请选择目标；或在设置中启用 AI 判定，由 AI 自动归属。</template>
         </Notice>
 
         <GoalCard
@@ -84,8 +84,8 @@ function onCreated() {
         />
 
         <Notice v-if="noRule" tone="warning">
-          这些目标<b>没有判定规则</b>，曲线永远不会动：<b>{{ noRule.titles.join('、') }}</b><br />
-          点开它们，在「判定规则」里补上。
+          以下目标<b>缺少判定规则</b>，曲线不会更新：<b>{{ noRule.titles.join('、') }}</b><br />
+          打开目标详情，在「判定规则」中添加。
         </Notice>
       </div>
 

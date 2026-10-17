@@ -12,7 +12,7 @@ const note = computed(() => (props.state && props.state.note) || '')
 
 const sub = computed(() => {
   let text = props.row.sub || ''
-  if (wait.value) text += ' • AI 正在分类…'
+  if (wait.value) text += ' · AI 判定中…'
   else if (note.value) text += ' • ' + note.value
   return text
 })
@@ -42,11 +42,11 @@ const unlinked = computed(() => !goals.value.length)
         :muted="!goal.counts && !wait"
         :pending="wait"
         :suffix="!goal.counts && !wait ? '不计入' : ''"
-        :title="goal.counts ? (goal.byAi ? 'AI 挑的规则' : '') : '这条规则不接受手工记录，记了也不动这条线'"
+        :title="goal.counts ? (goal.byAi ? '由 AI 判定' : '') : '该规则不接受手工记录，不计入曲线'"
       />
       <LogChip
         v-if="unlinked"
-        label="没关联目标"
+        label="未关联目标"
         theme="none"
         muted
         :pending="wait"

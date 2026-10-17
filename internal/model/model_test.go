@@ -20,7 +20,7 @@ func Test规则的名字优先取_target_再退回_rationale(t *testing.T) {
 		{src("", "读完一章算一次").Summary(), "读完一章算一次"},
 		{src("  ", "  读完一章  ").Summary(), "读完一章"},
 		// 都没写就说实话，不编一个出来。
-		{src("", "").Summary(), "没写说明"},
+		{src("", "").Summary(), "未填写说明"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
@@ -45,6 +45,6 @@ func Test来源类型只有四种(t *testing.T) {
 		t.Fatal("手工打卡已经接线")
 	}
 	if model.KindGitCommits.Implemented() {
-		t.Fatal("git 还没接线")
+		t.Fatal("git 尚未接入")
 	}
 }

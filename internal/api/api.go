@@ -59,7 +59,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	// 未知的接口也回 404，不要掉进 SPA 兜底里拿一页 HTML。
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		fail(w, http.StatusNotFound, errors.New("没有这个接口"))
+		fail(w, http.StatusNotFound, errors.New("接口不存在。"))
 	})
 	mux.Handle("/", s.Assets)
 	return s.recoverer(mux)
@@ -70,7 +70,7 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 		defer func() {
 			if v := recover(); v != nil {
 				s.logf("panic · %v", v)
-				fail(w, http.StatusInternalServerError, fmt.Errorf("服务内部出错：%v", v))
+				fail(w, http.StatusInternalServerError, fmt.Errorf("服务内部错误：%v", v))
 			}
 		}()
 		next.ServeHTTP(w, r)
@@ -145,7 +145,7 @@ func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if g == nil {
-			fail(w, http.StatusBadRequest, fmt.Errorf("目标 #%d 不存在", id))
+			fail(w, http.StatusBadRequest, fmt.Errorf("目标 #%d 不存在。", id))
 			return
 		}
 	}
@@ -224,10 +224,10 @@ func (s *Server) handleClassify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if f.Decided == 0 {
-		writeJSON(w, http.StatusOK, map[string]string{"message": "AI 没判出来。"})
+		writeJSON(w, http.StatusOK, map[string]string{"message": "AI 未判定。"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"message": fmt.Sprintf("AI 归了 %d 条。", f.Decided)})
+	writeJSON(w, http.StatusOK, map[string]string{"message": fmt.Sprintf("AI 已归属 %d 条。", f.Decided)})
 }
 
 func (s *Server) handleBacklog(w http.ResponseWriter, r *http.Request) {
@@ -254,9 +254,9 @@ func (s *Server) handleBacklog(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadGateway, errors.New(f.Trouble))
 		return
 	}
-	msg := "AI 没判出来，这些先没归到规则。"
+	msg := "AI 未判定，相关记录暂未归属到规则。"
 	if f.Decided > 0 {
-		msg = fmt.Sprintf("AI 归了 %d 条。", f.Decided)
+		msg = fmt.Sprintf("AI 已归属 %d 条。", f.Decided)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": msg})
 }
@@ -279,7 +279,7 @@ func (s *Server) handleAddGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
-		fail(w, http.StatusBadRequest, errors.New("目标得有个名字。"))
+		fail(w, http.StatusBadRequest, errors.New("目标名称不能为空。"))
 		return
 	}
 	kind, err := model.ParseKind(in.Kind)
@@ -398,7 +398,7 @@ func (s *Server) handleAddSource(w http.ResponseWriter, r *http.Request) {
 	}
 	if kind.NeedsTarget() && strings.TrimSpace(in.Target) == "" {
 		fail(w, http.StatusBadRequest,
-			errors.New("空着就等于「什么都算」——那条规则会把所有活动都装进来，曲线永远在涨"))
+			errors.New("目标对象不能为空。否则规则会匹配所有活动，导致曲线持续上升。"))
 		return
 	}
 	today, _, stamp := nowParts()
@@ -460,11 +460,11 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(in.BaseURL) == "" {
 		fail(w, http.StatusBadRequest,
-			errors.New("接口地址不能空着——填不对就关掉 AI 判定，那时拿不准会问你。"))
+			errors.New("接口地址不能为空。"))
 		return
 	}
 	if strings.TrimSpace(in.Model) == "" {
-		fail(w, http.StatusBadRequest, errors.New("模型名不能空着。"))
+		fail(w, http.StatusBadRequest, errors.New("模型名称不能为空。"))
 		return
 	}
 	if err := ai.Save(s.Store, in.Enabled, in.BaseURL, in.Model, in.Threshold, in.APIKey); err != nil {
@@ -530,7 +530,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 func decode(r *http.Request, into any) error {
 	defer r.Body.Close()
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(into); err != nil {
-		return fmt.Errorf("请求内容读不出来：%w", err)
+		return fmt.Errorf("无法读取请求内容：%w", err)
 	}
 	return nil
 }
@@ -543,7 +543,7 @@ func readAll(r *http.Request) ([]byte, error) {
 func pathID(r *http.Request) (int64, error) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("id 不合法：%s", r.PathValue("id"))
+		return 0, fmt.Errorf("无效的 id：%s", r.PathValue("id"))
 	}
 	return id, nil
 }

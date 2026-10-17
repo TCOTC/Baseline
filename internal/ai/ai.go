@@ -332,7 +332,7 @@ func ClassifyOne(s *store.Store, checkinID int64, today time.Time) (Filled, erro
 	}
 	pick, err := classify(&cfg, note, cands)
 	if err != nil {
-		out.Trouble = fmt.Sprintf("AI 没判成：%v", err)
+		out.Trouble = fmt.Sprintf("AI 判定失败：%v", err)
 		return out, nil
 	}
 	if pick.SourceID != nil && pick.Confidence >= cfg.Threshold {
@@ -431,7 +431,7 @@ func classify(cfg *Config, note string, cands []Candidate) (Pick, error) {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return Pick{}, fmt.Errorf("请求发不出去：%w", err)
+		return Pick{}, fmt.Errorf("请求发送失败：%w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.APIKey))
 	req.Header.Set("Content-Type", "application/json")
@@ -439,28 +439,28 @@ func classify(cfg *Config, note string, cands []Candidate) (Pick, error) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			return Pick{}, fmt.Errorf("等太久了（超过 %d 秒）", int(timeout.Seconds()))
+			return Pick{}, fmt.Errorf("请求超时（超过 %d 秒）。", int(timeout.Seconds()))
 		}
-		return Pick{}, fmt.Errorf("请求发不出去：%w", err)
+		return Pick{}, fmt.Errorf("请求发送失败：%w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		switch resp.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden:
-			return Pick{}, fmt.Errorf("密钥被拒了（HTTP %d），去设置里看看密钥对不对", resp.StatusCode)
+			return Pick{}, fmt.Errorf("密钥无效（HTTP %d），请在设置中检查 API 密钥。", resp.StatusCode)
 		case http.StatusNotFound:
-			return Pick{}, errors.New("接口不存在（HTTP 404），看看 base URL 是不是少了一段")
+			return Pick{}, errors.New("接口不存在（HTTP 404），请检查接口地址。")
 		case http.StatusTooManyRequests:
-			return Pick{}, errors.New("被限流了（HTTP 429），等一会儿再试")
+			return Pick{}, errors.New("请求过于频繁（HTTP 429），请稍后重试。")
 		default:
-			return Pick{}, fmt.Errorf("服务返回 HTTP %d", resp.StatusCode)
+			return Pick{}, fmt.Errorf("服务返回 HTTP %d。", resp.StatusCode)
 		}
 	}
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return Pick{}, fmt.Errorf("读回复失败：%w", err)
+		return Pick{}, fmt.Errorf("读取响应失败：%w", err)
 	}
 	return ParseReply(raw, cands)
 }
@@ -515,23 +515,23 @@ type chatReply struct {
 func ParseReply(body []byte, cands []Candidate) (Pick, error) {
 	var reply chatReply
 	if err := json.Unmarshal(body, &reply); err != nil {
-		return Pick{}, fmt.Errorf("服务返回的不是 JSON：%s", brief(string(body)))
+		return Pick{}, fmt.Errorf("服务返回内容不是 JSON：%s", brief(string(body)))
 	}
 	if len(reply.Choices) == 0 || reply.Choices[0].Message.Content == "" {
-		return Pick{}, errors.New("回复里没有 choices[0].message.content")
+		return Pick{}, errors.New("响应缺少 choices[0].message.content。")
 	}
 	content := reply.Choices[0].Message.Content
 
 	raw, ok := extractJSON(content)
 	if !ok {
-		return Pick{}, fmt.Errorf("回复里找不到 JSON：%s", brief(content))
+		return Pick{}, fmt.Errorf("响应中未找到 JSON：%s", brief(content))
 	}
 	var v struct {
 		ID         *int64 `json:"id"`
 		Confidence *int   `json:"confidence"`
 	}
 	if err := json.Unmarshal([]byte(raw), &v); err != nil {
-		return Pick{}, fmt.Errorf("回复不是合法 JSON（%v）：%s", err, brief(content))
+		return Pick{}, fmt.Errorf("响应不是合法 JSON（%v）：%s", err, brief(content))
 	}
 
 	conf := 0
@@ -576,7 +576,7 @@ func brief(s string) string {
 	return t
 }
 
-// Probe 是设置页上那个「测一下」。它要回答的是「配好没有」，所以真发一个最小的
+// Probe 是设置页上那个「测试连接」。它要回答的是「配好没有」，所以真发一个最小的
 // 请求，并且把**用的是哪个模型**报回来——配错了模型是最常见的一种「看起来配好了」。
 func Probe(s *store.Store) (string, error) {
 	cfg, err := ConfigOf(s)
@@ -584,10 +584,10 @@ func Probe(s *store.Store) (string, error) {
 		return "", err
 	}
 	if cfg.KeyBroken {
-		return "", errors.New("密钥读不出来了，重新填一次")
+		return "", errors.New("密钥读取失败，请重新填写。")
 	}
 	if !cfg.Ready() {
-		return "", errors.New("还差一个 API 密钥")
+		return "", errors.New("尚未填写 API 密钥。")
 	}
 	cands := []Candidate{
 		{ID: 1, What: "读完一章书"},
@@ -602,14 +602,14 @@ func Probe(s *store.Store) (string, error) {
 	if pick.SourceID == nil {
 		// 说「不知道」是规矩允许的答案，不是失败——这一条也要讲清楚，
 		// 否则第一次用的人会以为配坏了。
-		return fmt.Sprintf("连接正常，用的模型是 %s，%d 毫秒。", cfg.Model, ms), nil
+		return fmt.Sprintf("连接正常。模型：%s，耗时 %d 毫秒。", cfg.Model, ms), nil
 	}
 	what := "读完一章书"
 	if *pick.SourceID == 2 {
 		what = "做完一章习题"
 	}
 	return fmt.Sprintf(
-		"连接正常，用的模型是 %s，%d 毫秒。拿一条「把第 3 章的习题做完了」试它，它选了「%s」，把握 %d。",
+		"连接正常。模型：%s，耗时 %d 毫秒。测试记录「把第 3 章的习题做完了」被归入「%s」，置信度 %d。",
 		cfg.Model, ms, what, pick.Confidence,
 	), nil
 }

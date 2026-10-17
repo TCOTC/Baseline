@@ -45,8 +45,8 @@ const looseMsg = computed(() => {
   const g = goal.value
   if (!g || !g.loose) return ''
   return g.manualCount > 1
-    ? `有 ${g.loose} 条记录没归到规则，所以没进曲线。这个目标下有多条规则，每条记录要算哪一条得指认。`
-    : `有 ${g.loose} 条记录没归到规则，所以没进曲线。`
+    ? `有 ${g.loose} 条记录未归属到规则，未计入曲线。该目标下有多条规则，无法自动确定归属。`
+    : `有 ${g.loose} 条记录未归属到规则，未计入曲线。`
 })
 
 function fail(e) {
@@ -62,7 +62,7 @@ function startEdit() {
 async function saveEdit() {
   const title = editTitle.value.trim()
   if (!title) {
-    fail(new Error('目标得有个名字'))
+    fail(new Error('目标名称不能为空。'))
     return
   }
   try {
@@ -78,7 +78,7 @@ async function saveEdit() {
 async function saveArchive() {
   const value = reason.value.trim()
   if (!value) {
-    fail(new Error('归档要写一句原因——那是三个月后唯一能回看的东西'))
+    fail(new Error('归档必须填写原因，便于日后回顾。'))
     return
   }
   try {
@@ -93,10 +93,10 @@ async function saveArchive() {
 
 async function deleteGoal() {
   const yes = await askConfirm({
-    title: '删掉这个目标？',
-    text: '它还没有任何记录，删了就没了。如果只是暂时不想做，走归档——曲线和记录都会留着，还有你写下的那句理由。',
+    title: '删除目标',
+    text: '该目标暂无记录，删除后无法恢复。如需暂时停止，请使用归档：曲线、记录和归档原因都会保留。',
     what: goal.value.title,
-    ok: '删掉',
+    ok: '删除',
   })
   if (!yes) return
   try {
@@ -109,10 +109,10 @@ async function deleteGoal() {
 
 async function deleteRule(rule) {
   const yes = await askConfirm({
-    title: '删掉这条判定规则？',
-    text: '删掉之后，这类活动就不再推进这个目标了。如果这是最后一条规则，它的曲线会停在这里不再动。',
+    title: '删除判定规则',
+    text: '删除后，此类活动不再计入该目标。若这是最后一条规则，该目标的曲线将停止更新。',
     what: [rule.kindLabel, rule.rationale].filter(Boolean).join(' · '),
-    ok: '删掉规则',
+    ok: '删除规则',
   })
   if (!yes) return
   try {
@@ -131,12 +131,12 @@ function pickKind(value) {
 
 async function addSource() {
   if (!kind.value) {
-    fail(new Error('先选一种来源'))
+    fail(new Error('请选择一种来源类型。'))
     return
   }
   const value = target.value.trim()
   if (needTarget.value && !value) {
-    fail(new Error('空着就等于「什么都算」——那条规则会把所有活动都装进来，曲线永远在涨'))
+    fail(new Error('目标对象不能为空。否则规则会匹配所有活动，导致曲线持续上升。'))
     return
   }
   try {
@@ -175,15 +175,15 @@ async function retry() {
           <template v-if="!editing">
             <h1 class="goal-detail__title">{{ goal.title }}</h1>
             <p class="goal-detail__why">
-              {{ goal.why || '还没有写「为什么想做」。' }}
+              {{ goal.why || '暂无背景说明。' }}
             </p>
           </template>
 
           <div v-else class="goal-detail__edit">
-            <FormField label="名字" for-id="etitle">
+            <FormField label="目标名称" for-id="etitle">
               <AppInput id="etitle" v-model="editTitle" maxlength="40" />
             </FormField>
-            <FormField label="为什么想做">
+            <FormField label="目标背景">
               <AppTextarea v-model="editWhy" :rows="3" />
             </FormField>
             <ActionBar class="goal-detail__edit-actions">
@@ -205,14 +205,14 @@ async function retry() {
 
       <div class="goal-detail__curve-caption">
         <span>{{ goal.firstDay }}</span>
-        <span>{{ goal.spanDays }} 天 · 阶梯线不做插值</span>
+        <span>{{ goal.spanDays }} 天 · 阶梯线，不插值</span>
         <span>{{ goal.lastDay }}</span>
       </div>
     </template>
 
     <div class="goal-detail__panes">
       <div class="goal-detail__pane goal-detail__pane--rules">
-        <AppSection title="判定规则" hint="什么算推进它">
+        <AppSection title="判定规则" hint="计入条件">
           <div class="goal-detail__rules">
             <article v-for="rule in goal.rules" :key="rule.id" class="goal-detail__rule">
               <div>
@@ -228,7 +228,7 @@ async function retry() {
             </article>
 
             <Notice v-if="!goal.rules.length" class="goal-detail__hint">
-              还没有判定规则。没有它，这个目标给不出「什么算推进它」——曲线永远不会动。
+              暂无判定规则。缺少规则时，该目标无法计算推进。
             </Notice>
 
             <!-- 挂上来了、但没归到任何规则。别让人自己发现：一条记录在流水里，
@@ -241,37 +241,37 @@ async function retry() {
                 :disabled="retrying"
                 @click="retry"
               >
-                {{ retrying ? '正在判…' : `让 AI 判这 ${goal.loose} 条` }}
+                {{ retrying ? '判定中…' : `由 AI 判定 ${goal.loose} 条` }}
               </AppButton>
             </Notice>
           </div>
 
           <AppButton id="addrbtn" variant="dashed" class="goal-detail__add-rule" @click="addrOpen = !addrOpen">
-            ＋ 加一条规则
+            ＋ 添加规则
           </AppButton>
 
           <div v-if="addrOpen" id="addrform" class="goal-detail__add-form">
             <SourceKindPicker id="addrkinds" :model-value="kind" @update:model-value="pickKind" />
-            <FormField v-if="needTarget" label="具体是哪个？" :hint="findKind(kind).targetPrompt">
+            <FormField v-if="needTarget" label="目标对象" :hint="findKind(kind).targetPrompt">
               <AppInput id="artarget" v-model="target" maxlength="120" />
             </FormField>
-            <FormField label="什么算推进它">
+            <FormField label="计入条件">
               <AppInput
                 id="arrationale"
                 v-model="rationale"
                 maxlength="120"
-                placeholder="比如：读完一章，或做完一章题，算一次"
+                placeholder="例如：读完一章，或完成一章习题，计一次"
               />
             </FormField>
             <ActionBar class="goal-detail__form-actions">
-              <AppButton id="arsave" variant="primary" @click="addSource">加上</AppButton>
+              <AppButton id="arsave" variant="primary" @click="addSource">添加</AppButton>
               <AppButton id="arcancel" @click="addrOpen = false">取消</AppButton>
             </ActionBar>
           </div>
         </AppSection>
 
         <ActionBar class="goal-detail__meta-actions">
-          <AppButton id="dedit" @click="startEdit">修改</AppButton>
+          <AppButton id="dedit" @click="startEdit">编辑</AppButton>
           <AppButton id="darch" @click="archOpen = true">归档</AppButton>
           <AppButton id="ddel" variant="danger" :disabled="!goal.canDelete" @click="deleteGoal">
             删除
@@ -279,21 +279,21 @@ async function retry() {
         </ActionBar>
 
         <Notice v-if="!goal.canDelete" class="goal-detail__hint">
-          已经记了 {{ goal.checkinCount }} 条，所以删不掉。动过的历史不该被一次点击抹掉——不要了请走归档，它会保留曲线和放弃的理由。
+          已记录 {{ goal.checkinCount }} 条，无法删除。如需停止，请使用归档，曲线与归档原因都会保留。
         </Notice>
         <Notice v-else class="goal-detail__hint">
-          还没有任何记录，所以可以直接删掉。删了就没了，归档则会留下痕迹。
+          暂无记录，可以删除。删除后无法恢复；归档会保留曲线和原因。
         </Notice>
 
         <Notice v-if="err" id="derr" tone="danger" class="goal-detail__hint">{{ err }}</Notice>
 
         <div v-if="archOpen" class="goal-detail__archive-form">
-          <FormField label="为什么放弃它？">
+          <FormField label="归档原因">
             <AppTextarea
               id="areason"
               v-model="reason"
               :rows="2"
-              placeholder="这句话三个月后你会想再看一眼"
+              placeholder="例如：方向调整，暂时不再投入。"
             />
           </FormField>
           <ActionBar class="goal-detail__form-actions">
@@ -307,7 +307,7 @@ async function retry() {
         <AppSection title="记录" :hint="`${goal.checkinCount} 条`">
           <LogList variant="detail" :rows="goal.timeline" :ai-state="aiState" :show-empty="false" />
           <Notice v-if="!goal.timeline.length" class="goal-detail__hint">
-            这个目标还没有任何记录。回主页，在底部输入框里记一条。
+            该目标暂无记录。返回首页，在底部输入框中添加记录。
           </Notice>
         </AppSection>
       </div>

@@ -41,7 +41,7 @@ func (k SourceKind) Label() string {
 	case KindExternalMetric:
 		return "外部数据"
 	case KindDerived:
-		return "派生"
+		return "组合"
 	}
 	return string(k)
 }
@@ -60,7 +60,7 @@ func ParseKind(s string) (SourceKind, error) {
 	case KindManualCheckin, KindGitCommits, KindExternalMetric, KindDerived:
 		return k, nil
 	}
-	return "", fmt.Errorf("未知的计分来源类型：%s（可用：manual_checkin / git_commits / external_metric / derived）", s)
+	return "", fmt.Errorf("未知的来源类型：%s（可用值：manual_checkin / git_commits / external_metric / derived）", s)
 }
 
 // Goal 一个目标。
@@ -98,7 +98,7 @@ func (s Source) Summary() string {
 	if r := strings.TrimSpace(s.Rationale); r != "" {
 		return r
 	}
-	return "没写说明"
+	return "未填写说明"
 }
 
 // CheckinLink 是一条记录挂到某个目标上的关联。

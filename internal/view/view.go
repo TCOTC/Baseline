@@ -37,7 +37,7 @@ type Card struct {
 	Current     float64 `json:"current"`
 	CurrentText string  `json:"currentText"`
 	DeltaText   string  `json:"deltaText"`
-	// Zero 为 true 时数字画成灰色（还没有记录 / 规则没接线）。
+	// Zero 为 true 时数字画成灰色（暂无记录 / 规则未接入）。
 	Zero   bool      `json:"zero"`
 	Curve  Curve     `json:"curve"`
 	Strip  []bool    `json:"strip"`
@@ -326,11 +326,11 @@ func buildCard(s *store.Store, g model.Goal, today time.Time) (Card, error) {
 	}
 
 	cur := metricNum(series.Current)
-	delta := "还没有记录"
+	delta := "暂无记录"
 	has := series.HasData && series.Wired
 	switch {
 	case !series.Wired:
-		delta = "规则未接线"
+		delta = "规则未接入"
 	case has:
 		switch {
 		case series.DeltaWeek > 0:
@@ -363,7 +363,7 @@ func buildCard(s *store.Store, g model.Goal, today time.Time) (Card, error) {
 // ruleLine 是目标的判定规则摘要，显示在卡片底部。
 func ruleLine(srcs []model.Source) RuleLine {
 	if len(srcs) == 0 {
-		return RuleLine{Empty: true, Text: "没有判定规则 —— 这个目标给不出「什么算推进它」"}
+		return RuleLine{Empty: true, Text: "缺少判定规则 · 无法计算推进"}
 	}
 	parts := make([]string, 0, len(srcs))
 	for _, src := range srcs {
@@ -387,7 +387,7 @@ func curveOf(series metrics.GoalSeries) Curve {
 	c := Curve{Kind: "line", Width: w, Height: h, BaseY: h - pad}
 
 	// 先判「规则有没有接线」，再判「有没有记录」。一条只有 git 规则的目标，
-	// 值恒为 0；说它「还没有任何记录」是把「没接线」讲成了「没动」。
+	// 值恒为 0；说它「暂无记录」是把「未接入」讲成了「未动」。
 	if !series.Wired {
 		c.Kind = "unwired"
 		return c
@@ -426,7 +426,7 @@ func curveOf(series metrics.GoalSeries) Curve {
 	c.Path = b.String()
 
 	if len(series.Days) > 0 {
-		c.Range = fmt.Sprintf("%s → %s · %d 天 · 阶梯线不做插值",
+		c.Range = fmt.Sprintf("%s → %s · %d 天 · 阶梯线，不插值",
 			series.Days[0], series.Days[len(series.Days)-1], len(series.Days))
 	}
 	return c
@@ -524,16 +524,16 @@ func buildGoal(s *store.Store, g model.Goal, today time.Time, aiReady bool) (*Go
 
 func buildSettings(cfg ai.Config) (*SettingsPage, error) {
 	masked := cfg.MaskedKey()
-	keyPlaceholder := "还没填"
+	keyPlaceholder := "未填写"
 	if masked != "" {
-		keyPlaceholder = "现在是 " + masked
+		keyPlaceholder = "当前密钥：" + masked
 	}
-	state, blurb := "已关闭", "一条记录如果有两条规则都说得通，会问你自己选哪一条。"
-	toggle := "打开 AI 判定"
+	state, blurb := "已停用", "记录仍会保存；归属需要手动选择。"
+	toggle := "启用 AI 判定"
 	if cfg.Enabled {
-		state = "已打开"
-		blurb = "一条记录如果有两条规则都说得通，让 AI 帮你挑一条。它只在你写的规则里挑，拿不准就问你。"
-		toggle = "关掉 AI 判定"
+		state = "已启用"
+		blurb = "当一条记录同时符合多条规则时，由 AI 在已登记规则中选择归属；置信度低于阈值时保留为待归属。"
+		toggle = "停用 AI 判定"
 	}
 	return &SettingsPage{
 		Enabled:        cfg.Enabled,
@@ -611,7 +611,7 @@ func rowsOf(checkins []model.Checkin, goals map[int64]model.Goal, sources map[in
 					Title: g.Title, Color: g.Color, Counts: l.Counts(), ByAI: l.ByAI,
 				})
 			} else {
-				chips = append(chips, RowGoal{Title: "（已删除）", Color: "none"})
+				chips = append(chips, RowGoal{Title: "（目标已删除）", Color: "none"})
 			}
 		}
 
@@ -633,7 +633,7 @@ func rowsOf(checkins []model.Checkin, goals map[int64]model.Goal, sources map[in
 		}
 		sub := "手工打卡"
 		if len(ruleNames) > 0 {
-			sub = "手工打卡 • " + strings.Join(ruleNames, "、")
+			sub = "手工打卡 · " + strings.Join(ruleNames, "、")
 		}
 
 		rows = append(rows, Row{

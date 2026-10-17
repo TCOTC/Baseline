@@ -41,7 +41,7 @@ defineEmits(['nav'])
 
     <p class="goal-card__rule" :class="{ 'goal-card__rule--missing': card.rule.empty }">
       <template v-if="card.rule.empty">
-        <b>没有判定规则</b> —— 这个目标给不出「什么算推进它」
+        <b>缺少判定规则</b> · 无法计算推进
       </template>
       <template v-else>{{ card.rule.text }}</template>
     </p>

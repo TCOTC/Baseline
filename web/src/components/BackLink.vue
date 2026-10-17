@@ -3,7 +3,7 @@ defineEmits(['nav'])
 </script>
 
 <template>
-  <a class="back-link" href="/" @click.prevent="$emit('nav', '/')">← 返回主页</a>
+  <a class="back-link" href="/" @click.prevent="$emit('nav', '/')">← 返回首页</a>
 </template>
 
 <style scoped lang="scss">

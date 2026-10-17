@@ -16,7 +16,7 @@ defineProps({
     :data-theme="theme"
     :title="title || undefined"
   >
-    {{ label }}<span v-if="pending || suffix" class="log-chip__suffix">·{{ pending ? '分类中' : suffix }}</span>
+    {{ label }}<span v-if="pending || suffix" class="log-chip__suffix">·{{ pending ? '判定中' : suffix }}</span>
   </span>
 </template>
 

@@ -177,10 +177,10 @@ CREATE TABLE IF NOT EXISTS settings (
 func (s *Store) GoalAdd(title, why, color, now string) (int64, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
-		return 0, errors.New("目标名不能为空")
+		return 0, errors.New("目标名称不能为空。")
 	}
 	if !validColor(color) {
-		return 0, fmt.Errorf("未知色板 `%s`，可用：%s", color, strings.Join(model.Palette, " / "))
+		return 0, fmt.Errorf("无效的颜色 `%s`，可用值：%s", color, strings.Join(model.Palette, " / "))
 	}
 	if existing, err := s.GoalByTitle(title); err != nil {
 		return 0, err
@@ -279,7 +279,7 @@ func (s *Store) GoalList(includeArchived bool) ([]model.Goal, error) {
 func (s *Store) GoalArchive(id int64, reason, now string) error {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
-		return errors.New("归档必须写一句原因（--reason）——这是为了让以后能回看当初为什么放弃")
+		return errors.New("归档必须填写原因，便于日后回顾。")
 	}
 	_, err := s.db.Exec(
 		"UPDATE goals SET status='archived', archived_at=?, why = why || ? WHERE id=?",
@@ -292,7 +292,7 @@ func (s *Store) GoalArchive(id int64, reason, now string) error {
 func (s *Store) GoalUpdate(id int64, title, why string) error {
 	title = strings.TrimSpace(title)
 	if title == "" {
-		return errors.New("目标得有个名字")
+		return errors.New("目标名称不能为空。")
 	}
 	_, err := s.db.Exec("UPDATE goals SET title=?, why=? WHERE id=?", title, strings.TrimSpace(why), id)
 	return err
@@ -309,7 +309,7 @@ func (s *Store) GoalDelete(id int64) error {
 	}
 	if n > 0 {
 		return fmt.Errorf(
-			"这个目标已经有 %d 条记录，删不掉。动过的历史不该被一次点击抹掉——不要了请走归档，它会保留曲线和放弃的理由。", n)
+			"该目标已有 %d 条记录，无法删除。如需停止，请使用归档；曲线与归档原因都会保留。", n)
 	}
 	_, err = s.db.Exec("DELETE FROM goals WHERE id=?", id)
 	return err
@@ -333,7 +333,7 @@ func (s *Store) SourceAdd(goalID int64, kind model.SourceKind, target, params, r
 		goalID, kind.String(), target,
 	).Scan(&dup)
 	if err == nil {
-		return 0, fmt.Errorf("这条计分来源已存在（source id=%d），未重复添加", dup)
+		return 0, fmt.Errorf("该来源已存在（来源 id=%d），未重复添加。", dup)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
@@ -631,7 +631,7 @@ func (s *Store) ResolveLinks(goalIDs []int64, picks [][2]int64, deferAmbiguous b
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("目标「%s」不在这次记录里，不能给它指定规则", title)
+			return nil, fmt.Errorf("目标「%s」不在本次记录中，无法指定规则。", title)
 		}
 		cands, err := s.ManualSourcesOf(goalID)
 		if err != nil {
@@ -644,7 +644,7 @@ func (s *Store) ResolveLinks(goalIDs []int64, picks [][2]int64, deferAmbiguous b
 			}
 		}
 		if !ok {
-			return nil, fmt.Errorf("规则 #%d 不是「%s」下的一条手工规则，不能拿它记账", sourceID, title)
+			return nil, fmt.Errorf("规则 #%d 不属于「%s」的手工规则，无法用于归属。", sourceID, title)
 		}
 	}
 
@@ -696,7 +696,7 @@ func ambiguousMsg(goalTitle string, cands []model.Source) string {
 		list = append(list, fmt.Sprintf("#%d %s", c.ID, c.Summary()))
 	}
 	// 用「；」分隔：规则原话里本来就有「，」「、」，再拿它们分隔就分不清哪到哪了。
-	return fmt.Sprintf("「%s」下有 %d 条规则都能算这条记录：%s。",
+	return fmt.Sprintf("「%s」下有 %d 条规则均匹配该记录：%s。",
 		goalTitle, len(cands), strings.Join(list, "；"))
 }
 

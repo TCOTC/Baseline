@@ -9,10 +9,10 @@ import SourceKindPicker from './SourceKindPicker.vue'
 
 // 新建目标是四步固定骨架 + 一步收口，不是自由聊天。
 // 固定骨架解决的是「自由聊天只能靠 prompt 求它自觉」：
-// 步数就是步数，而「什么不算」这一问永远不会被跳过。
+// 步数就是步数，而「排除范围」这一问永远不会被跳过。
 const emit = defineEmits(['close', 'created'])
 
-const STEP_NAMES = ['想推进什么', '为什么是现在', '什么算推进它', '什么不算', '落到哪种来源']
+const STEP_NAMES = ['目标名称', '目标背景', '判定规则', '排除范围', '来源类型']
 const FIELDS = ['title', 'why', 'rule', 'notrule']
 
 const d = ref({
@@ -72,7 +72,7 @@ function next() {
   switch (d.value.step) {
     case 0:
       if (!value) {
-        d.value.problem = '总得先有个名字。'
+        d.value.problem = '目标名称不能为空。'
         return
       }
       d.value.title = value
@@ -84,7 +84,7 @@ function next() {
       if (!value) {
         // 这是「必须再问」的落点：收不出一条可计算的规则，就不该往下走。
         d.value.problem =
-          '这条填不了。没有它，这个目标给不出「什么算推进它」——曲线永远不会动，它也就不是目标，只是一句愿望。'
+          '判定规则不能为空。缺少可判定的规则，该目标无法产生有效的曲线。'
         return
       }
       d.value.rule = value
@@ -115,7 +115,7 @@ function takeTarget() {
   const value = inputVal.value.trim()
   if (!value) {
     d.value.problem =
-      '空着就等于「什么都算」——那条规则会把所有活动都装进来，曲线永远在涨，也就不告诉你偏了。'
+      '目标对象不能为空。否则规则会匹配所有活动，导致曲线持续上升。'
     askingTarget.value = true
     focusInput()
     return
@@ -159,7 +159,7 @@ async function create() {
     d.value.problem = ''
     d.value.step = 6
   } catch (e) {
-    d.value.problem = '没建成：' + e.message
+    d.value.problem = '创建失败：' + e.message
   } finally {
     busy.value = false
   }
@@ -192,7 +192,7 @@ function onKey(event) {
     </div>
 
     <template v-if="askingTarget">
-      <h2 class="add-goal-dialog__title">{{ kindSpec.label }} · 具体是哪个？</h2>
+      <h2 class="add-goal-dialog__title">{{ kindSpec.label }} · 目标对象</h2>
       <p class="add-goal-dialog__note">{{ kindSpec.targetPrompt }}</p>
       <AppInput ref="inputEl" v-model="inputVal" type="text" maxlength="120" />
       <div class="add-goal-dialog__actions">
@@ -204,14 +204,14 @@ function onKey(event) {
     </template>
 
     <template v-else-if="d.step === 0">
-      <h2 class="add-goal-dialog__title">你想推进什么？</h2>
-      <p class="add-goal-dialog__note">一句话就行。它会是左栏那张卡的标题。</p>
+      <h2 class="add-goal-dialog__title">目标名称</h2>
+      <p class="add-goal-dialog__note">用一句话描述要推进的方向，它会显示为目标卡片的标题。</p>
       <AppInput
         ref="inputEl"
         v-model="inputVal"
         type="text"
         maxlength="40"
-        placeholder="比如：打牢计算机基础"
+        placeholder="例如：夯实计算机基础"
       />
       <div class="add-goal-dialog__actions">
         <AppButton variant="primary" @click="next">下一步</AppButton>
@@ -221,17 +221,16 @@ function onKey(event) {
     </template>
 
     <template v-else-if="d.step === 1">
-      <h2 class="add-goal-dialog__title">为什么是现在？</h2>
+      <h2 class="add-goal-dialog__title">目标背景</h2>
       <p class="add-goal-dialog__note">
-        遇到什么事了，还是在准备什么？<br />
-        这一问是为了推出「什么算推进它」，<b>不是问你感受</b>——所以只有在你上一句太宽、推不出规则的时候才问。
+        可选。说明为什么现在开始这件事，便于日后回顾。
       </p>
       <AppInput
         ref="inputEl"
         v-model="inputVal"
         type="text"
         maxlength="120"
-        placeholder="比如：想做出自己的产品，但基础不够"
+        placeholder="例如：想做出自己的产品，但基础不足"
       />
       <div class="add-goal-dialog__actions">
         <AppButton variant="primary" @click="next">下一步</AppButton>
@@ -242,16 +241,16 @@ function onKey(event) {
     </template>
 
     <template v-else-if="d.step === 2">
-      <h2 class="add-goal-dialog__title">什么算推进它？</h2>
+      <h2 class="add-goal-dialog__title">判定规则</h2>
       <p class="add-goal-dialog__note">
-        越具体越好。一句能装下任何活动的规则等于没有规则——那样的曲线会一直涨，也就永远不告诉你偏了。
+        定义该目标的计入条件。规则需要具体到可判定；范围过宽会让曲线持续上升，无法反映实际进展。
       </p>
       <AppInput
         ref="inputEl"
         v-model="inputVal"
         type="text"
         maxlength="120"
-        placeholder="比如：读完一章，或做完一章题，算一次"
+        placeholder="例如：读完一章，或完成一章习题，计一次"
       />
       <div class="add-goal-dialog__actions">
         <AppButton variant="primary" @click="next">下一步</AppButton>
@@ -262,22 +261,21 @@ function onKey(event) {
     </template>
 
     <template v-else-if="d.step === 3">
-      <h2 class="add-goal-dialog__title">什么不算？</h2>
+      <h2 class="add-goal-dialog__title">排除范围</h2>
       <p class="add-goal-dialog__note">
-        最容易跳过、也最值钱的一问。<br />
-        同一件事看起来像在推进它、其实不算的，是什么？<br />
-        （例：在 Learn-English 上写代码不算推进「英语」——只算复习记录。<br />
-        不划这条边界，那条曲线会假装在涨。）
+        列出看似相关、但不计入该目标的活动。<br />
+        例如：在 Learn-English 上写代码不计入「英语」，只计复习记录。<br />
+        跳过此项仍会创建目标，但会提示曲线可能失真。
       </p>
       <AppInput
         ref="inputEl"
         v-model="inputVal"
         type="text"
         maxlength="120"
-        placeholder="比如：在它上面写代码、改功能，不算"
+        placeholder="例如：在该项目上写代码、改功能，不计入"
       />
       <div class="add-goal-dialog__skip">
-        <AppButton id="dlg-skip" variant="dashed" @click="skipBoundary">想不出来，先跳过</AppButton>
+        <AppButton id="dlg-skip" variant="dashed" @click="skipBoundary">暂时跳过</AppButton>
       </div>
       <div class="add-goal-dialog__actions">
         <AppButton variant="primary" @click="next">下一步</AppButton>
@@ -288,8 +286,8 @@ function onKey(event) {
     </template>
 
     <template v-else-if="d.step === 4">
-      <h2 class="add-goal-dialog__title">这条规则落到哪种来源？</h2>
-      <p class="add-goal-dialog__note">四种，是上限。落到别的上去，它就开始变成另一件东西了。</p>
+      <h2 class="add-goal-dialog__title">来源类型</h2>
+      <p class="add-goal-dialog__note">共四种来源类型，覆盖当前支持的计分方式。</p>
       <SourceKindPicker :model-value="d.kind" @update:model-value="pickKind" />
       <div class="add-goal-dialog__actions add-goal-dialog__actions--cancel">
         <AppButton @click="emit('close')">取消</AppButton>
@@ -298,37 +296,37 @@ function onKey(event) {
     </template>
 
     <template v-else-if="d.step === 5">
-      <h2 class="add-goal-dialog__title">确认一下</h2>
+      <h2 class="add-goal-dialog__title">确认信息</h2>
       <p class="add-goal-dialog__answer"><b>{{ d.title }}</b></p>
-      <p v-if="d.why" class="add-goal-dialog__answer">为什么：{{ d.why }}</p>
-      <p class="add-goal-dialog__answer">算推进：{{ d.rule }}</p>
+      <p v-if="d.why" class="add-goal-dialog__answer">背景：{{ d.why }}</p>
+      <p class="add-goal-dialog__answer">判定规则：{{ d.rule }}</p>
       <p class="add-goal-dialog__answer">
-        不算：<template v-if="d.notrule">{{ d.notrule }}</template><b v-else>没划</b>
+        排除范围：<template v-if="d.notrule">{{ d.notrule }}</template><b v-else>未填写</b>
       </p>
       <p class="add-goal-dialog__answer">
         来源：{{ kindSpec.label }}<template v-if="d.target"> · {{ d.target }}</template>
       </p>
       <Notice v-if="!d.notrule" tone="danger" class="add-goal-dialog__problem">
-        没划边界。以后出现「看起来像在推进它、其实不算」的活动时，这条曲线会说谎——而它会理直气壮地涨。
+        未填写排除范围。若出现看似相关但不计入的活动，曲线可能失真并持续上升。
       </Notice>
       <div class="add-goal-dialog__actions">
-        <AppButton variant="primary" :disabled="busy" @click="create">建这个目标</AppButton>
+        <AppButton variant="primary" :disabled="busy" @click="create">创建目标</AppButton>
         <AppButton @click="emit('close')">取消</AppButton>
       </div>
       <Notice v-if="d.problem" tone="danger" class="add-goal-dialog__problem">{{ d.problem }}</Notice>
     </template>
 
     <template v-else-if="d.step === 6">
-      <h2 class="add-goal-dialog__title">建好了</h2>
+      <h2 class="add-goal-dialog__title">创建完成</h2>
       <p class="add-goal-dialog__answer">
         当前值 <b>{{ d.valueText }}</b> 次<br />
         <template v-if="d.value === 0">
-          还是 0。要么规则写错了，要么这条线真的还没动——两种都值得知道。
+          当前值为 0。可能是规则有误，也可能是尚无记录，两种情况都需要确认。
         </template>
-        <template v-else>规则一写完就算出了数，说明它是可计算的。</template>
+        <template v-else>规则已产生数值，说明它可以被计算。</template>
       </p>
       <div class="add-goal-dialog__actions">
-        <AppButton variant="primary" @click="emit('created')">好</AppButton>
+        <AppButton variant="primary" @click="emit('created')">完成</AppButton>
       </div>
     </template>
   </section>

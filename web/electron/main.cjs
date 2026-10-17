@@ -57,7 +57,7 @@ function startBackend() {
 
   return new Promise((resolve, reject) => {
     let buf = ''
-    const timer = setTimeout(() => reject(new Error('后端 10 秒内没有就绪')), 10000)
+    const timer = setTimeout(() => reject(new Error('后端在 10 秒内未就绪。')), 10000)
     child.stdout.on('data', (d) => {
       buf += String(d)
       let i
@@ -134,7 +134,7 @@ function buildTray() {
   tray.setToolTip('基线')
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: '打开基线', click: showAndFocus },
+      { label: '打开窗口', click: showAndFocus },
       { type: 'separator' },
       {
         label: '退出',

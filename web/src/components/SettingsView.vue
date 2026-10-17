@@ -15,15 +15,15 @@ const props = defineProps({ page: { type: Object, required: true } })
 const emit = defineEmits(['reload', 'nav'])
 
 const tabs = [
-  { id: 'ai', label: 'AI 判定', hint: '开关与把握门槛' },
-  { id: 'connection', label: '接口与密钥', hint: '模型与密钥' },
+  { id: 'ai', label: 'AI 判定', hint: '启用状态与置信度阈值' },
+  { id: 'connection', label: '接口与密钥', hint: '地址、模型与密钥' },
 ]
 
 const s = computed(() => props.page.settings)
 const activeId = ref('ai')
 const activeTab = computed(() => tabs.find((tab) => tab.id === activeId.value) || tabs[0])
 const activeHint = computed(() =>
-  activeId.value === 'ai' ? s.value.blurb : '配一个 OpenAI 兼容的接口。',
+  activeId.value === 'ai' ? s.value.blurb : '配置 OpenAI 兼容接口。',
 )
 
 const base = ref('')
@@ -52,7 +52,7 @@ watch(
 function selectTab(id) {
   if (id === activeId.value) return
   activeId.value = id
-  // 「再点一次」只对刚刚那个分类里的清空有意义；切走再回来不该还是上膛状态。
+  // 「确认清除」只对刚刚那个分类里的清空有意义；切走再回来不该还是上膛状态。
   armed.value = false
   if (scrollEl.value) scrollEl.value.scrollTop = 0
 }
@@ -84,9 +84,9 @@ async function onSave() {
   try {
     await save(true, keyValue())
     emit('reload')
-    show('已保存')
+    show('保存成功')
   } catch (e) {
-    show('没存上：' + e.message, true)
+    show('保存失败：' + e.message, true)
   } finally {
     busy.value = false
   }
@@ -95,16 +95,16 @@ async function onSave() {
 async function onTest() {
   if (busy.value) return
   busy.value = true
-  show('正在测…')
+  show('正在测试…')
   try {
-    // 「测一下」要先把当前填的存下来再测，否则测的是上一次的配置，
+    // 「测试连接」要先把当前填的存下来再测，否则测的是上一次的配置，
     // 而人以为测的是屏幕上这些字。
     await save(true, keyValue())
     const result = await api.testAI()
     show(result.message)
     emit('reload')
   } catch (e) {
-    show('没通：' + e.message, true)
+    show('连接失败：' + e.message, true)
   } finally {
     busy.value = false
   }
@@ -115,11 +115,11 @@ async function onToggle() {
   busy.value = true
   show('')
   try {
-    // 按钮上是「关掉」还是「打开」由服务端定；点下去就是取反。
+    // 按钮文案由服务端返回；点下去就是取反。
     await save(!s.value.enabled, keyValue())
     emit('reload')
   } catch (e) {
-    show('没改成功：' + e.message, true)
+    show('切换失败：' + e.message, true)
   } finally {
     busy.value = false
   }
@@ -138,7 +138,7 @@ async function onClear() {
     await save(true, '')
     emit('reload')
   } catch (e) {
-    show('没清掉：' + e.message, true)
+    show('清除失败：' + e.message, true)
   } finally {
     busy.value = false
   }
@@ -171,15 +171,15 @@ async function onClear() {
                 role="tabpanel"
                 aria-labelledby="settings-tab-ai"
               >
-                <SettingsGroup title="运行状态">
+                <SettingsGroup title="启用状态">
                   <div class="settings-view__state-row">
                     <div class="settings-view__state-text">
-                      <p class="settings-view__state">现在{{ s.state }}</p>
+                      <p class="settings-view__state">{{ s.state }}</p>
                       <p class="settings-view__hint">
                         {{
                           s.enabled
-                            ? '它不会新增规则，也不会改你已经选好的目标。'
-                            : '记录照样落库，只是拿不准的会留着等你指认。'
+                            ? 'AI 不会新增或改写规则，也不会改动已确定的归属。'
+                            : '记录仍会保存；无法唯一归属的记录将保留为待归属状态。'
                         }}
                       </p>
                     </div>
@@ -189,10 +189,10 @@ async function onClear() {
                   </div>
                 </SettingsGroup>
 
-                <SettingsGroup title="判定门槛" hint="低于这个把握就问你">
-                  <FormField label="多大把握才自动选" for-id="ai-th" last>
+                <SettingsGroup title="置信度阈值">
+                  <FormField label="自动归属的最低置信度" for-id="ai-th" last>
                     <p class="settings-view__threshold">
-                      当前把握门槛 <b id="ai-th-v">{{ threshold }}</b>
+                      当前阈值：<b id="ai-th-v">{{ threshold }}</b>
                     </p>
                     <input
                       id="ai-th"
@@ -204,7 +204,7 @@ async function onClear() {
                       step="5"
                     />
                     <p class="settings-view__hint">
-                      没到这个把握就不替你决定，改成问你。定得越高，自动决定的越少。
+                      低于该阈值时不会自动归属；阈值越高，自动归属越少。
                     </p>
                   </FormField>
                 </SettingsGroup>
@@ -221,7 +221,7 @@ async function onClear() {
                   <FormField
                     label="接口地址"
                     for-id="ai-base"
-                    hint="DeepSeek、OpenAI、Moonshot、本机跑的模型都行。"
+                    hint="支持 DeepSeek、OpenAI、Moonshot 及本地部署模型。"
                   >
                     <AppInput
                       id="ai-base"
@@ -243,15 +243,15 @@ async function onClear() {
                   </FormField>
                 </SettingsGroup>
 
-                <SettingsGroup title="API 密钥" hint="只存在这台电脑上">
+                <SettingsGroup title="API 密钥" hint="加密保存在本机">
                   <Notice v-if="s.keyBroken" tone="danger" class="settings-view__key-broken">
-                    密钥读不出来了，重新填一次就好。
+                    密钥读取失败，请重新填写。
                   </Notice>
 
                   <FormField
                     label="密钥"
                     for-id="ai-key"
-                    hint="不会发到别处。留空就是不改动现在这把。"
+                    hint="仅发送给上述接口。留空表示保留当前密钥。"
                     last
                   >
                     <div class="settings-view__key-row">
@@ -269,7 +269,7 @@ async function onClear() {
                         :disabled="s.clearDisabled || busy"
                         @click="onClear"
                       >
-                        {{ armed ? '再点一次' : '清掉' }}
+                        {{ armed ? '确认清除' : '清除密钥' }}
                       </AppButton>
                     </div>
                   </FormField>
@@ -285,7 +285,7 @@ async function onClear() {
               <AppButton id="ai-save" variant="primary" :disabled="busy" @click="onSave">
                 保存
               </AppButton>
-              <AppButton id="ai-test" :disabled="busy" @click="onTest">测一下</AppButton>
+              <AppButton id="ai-test" :disabled="busy" @click="onTest">测试连接</AppButton>
             </ActionBar>
 
             <Notice
@@ -401,7 +401,7 @@ async function onClear() {
   white-space: nowrap;
 }
 
-// 滑块：用目标色，和页面上其他可操作的东西一个调子。
+// 滑块沿用目标色，与页面其他可操作控件一致。
 .settings-view__range {
   width: 100%;
   accent-color: var(--blue);

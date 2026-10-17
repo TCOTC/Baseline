@@ -55,14 +55,14 @@ async function onCreated(res) {
   try {
     const r = await api.classify(id)
     await load()
-    if (r && String(r.message || '').indexOf('归了') > -1) {
+    if (r && String(r.message || '').indexOf('归属') > -1) {
       delete aiState[id]
     } else {
-      // 没判出来是正常结果，不是错误：那面标签本来就写着「·不计入」。
-      aiState[id] = { wait: false, note: 'AI 没判出来' }
+      // AI 未判定是正常结果，不是错误：那面标签本来就写着「·不计入」。
+      aiState[id] = { wait: false, note: 'AI 未判定' }
     }
   } catch (e) {
-    aiState[id] = { wait: false, note: 'AI 没判成' }
+    aiState[id] = { wait: false, note: 'AI 判定失败' }
     console.error('ai-classify', e)
   }
 }
@@ -98,10 +98,10 @@ onBeforeUnmount(() => window.removeEventListener('popstate', onPop))
 
     <div v-else class="app__boot">
       <div v-if="failMsg" class="app__boot-error">
-        读取失败：{{ failMsg }}<br />
+        加载失败：{{ failMsg }}<br />
         <AppButton class="app__retry" @click="load">重试</AppButton>
       </div>
-      <div v-else>正在读取…</div>
+      <div v-else>加载中…</div>
     </div>
   </div>
   <ConfirmModal />

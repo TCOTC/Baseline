@@ -26,7 +26,7 @@ func Handler() http.Handler {
 	}
 	if _, err := fs.Stat(sub, "index.html"); err != nil {
 		// 没跑过 pnpm build 的时候别给一片 404——那和「服务坏了」看起来一样。
-		return missing("前端还没构建。在 web/ 目录下跑 pnpm install && pnpm build，然后重新 go build。")
+		return missing("前端尚未构建。请在 web/ 目录执行 pnpm install && pnpm build，然后重新执行 go build。")
 	}
 	files := http.FileServer(http.FS(sub))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

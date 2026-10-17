@@ -18,7 +18,7 @@ defineProps({
   </svg>
 
   <p v-else class="curve curve--empty" :class="{ 'curve--unwired': curve.kind === 'unwired' }">
-    {{ curve.kind === 'unwired' ? '规则还没接线 —— 这条线现在算不出数' : '这条线还没有任何记录' }}
+    {{ curve.kind === 'unwired' ? '规则尚未接入，暂不产生数值' : '暂无记录' }}
   </p>
 </template>
 
@@ -52,7 +52,7 @@ defineProps({
   border-bottom: 1px dashed var(--goal-border);
 }
 
-// 「规则还没接线」和「还没有记录」不是一件事，颜色也不同。
+// 「规则未接入」和「暂无记录」不是一件事，颜色也不同。
 .curve--unwired {
   color: var(--amber-text);
   border-bottom-color: var(--amber-border);

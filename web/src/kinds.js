@@ -3,27 +3,27 @@ export const SOURCE_KINDS = [
   {
     value: 'manual_checkin',
     label: '手工打卡',
-    description: '我自己记一次。比如「读完一章算一次」',
+    description: '手动记录一次，例如「读完一章计一次」',
     needsTarget: false,
   },
   {
     value: 'git_commits',
     label: 'git 提交',
-    description: '某个仓库的提交数。还没接入，先登记规则',
+    description: '统计指定仓库的提交数。尚未接入，仅登记规则',
     needsTarget: true,
-    targetPrompt: '哪个仓库？（先填名字，接上之后才会计数）',
+    targetPrompt: '仓库名称（接入后开始计数）',
   },
   {
     value: 'external_metric',
     label: '外部数据',
-    description: '读别处已经记着的数，比如复习记录',
+    description: '读取其他来源中已有的数据，例如复习记录',
     needsTarget: true,
-    targetPrompt: '读哪份数据？（先填标识，接上之后才会计数）',
+    targetPrompt: '数据标识（接入后开始计数）',
   },
   {
     value: 'derived',
     label: '组合',
-    description: '上面几条按公式算',
+    description: '由其他来源按公式组合计算',
     needsTarget: false,
   },
 ]

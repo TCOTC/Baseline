@@ -129,7 +129,7 @@ onBeforeUnmount(() => {
     @scroll="onScroll"
   >
     <p v-if="!rows.length && showEmpty" class="log__empty">
-      <slot name="empty">还没有任何记录。<br />下面那个输入框里写一句，回车——记的是「刚做了什么」。</slot>
+      <slot name="empty">暂无记录。<br />在下方输入框填写内容并回车，即可记录刚完成的事。</slot>
     </p>
 
     <div v-else-if="rows.length" class="log__canvas" :style="{ height: totalHeight + 'px' }">

@@ -62,8 +62,8 @@ try {
   await page.press('#composer-input', 'Enter')
   await page.waitForFunction(() => document.body.innerText.includes('无目标的一条'), null, { timeout: 8000 })
   ok('无目标的记录进了流水', true)
-  ok('这条被标成没关联目标', (await page.locator('.log-entry--unlinked').count()) >= 1)
-  ok('主视图出现「没关联目标」的提醒', (await page.locator('#unlinked-warn').count()) === 1)
+  ok('这条被标成未关联目标', (await page.locator('.log-entry--unlinked').count()) >= 1)
+  ok('主视图出现「未关联目标」的提醒', (await page.locator('#unlinked-warn').count()) === 1)
 
   // ---- 记一条（带目标）----
   await page.click('#gchips .toggle-chip')
@@ -112,7 +112,7 @@ try {
   ok('设置页有模型名', (await page.inputValue('#ai-model')).length > 0)
   ok('密钥框是空的（明文不回显）', (await page.inputValue('#ai-key')) === '')
   const ph = await page.getAttribute('#ai-key', 'placeholder')
-  ok('密钥框只在 placeholder 里给掩码', ph === '还没填' || ph.startsWith('现在是'), ph)
+  ok('密钥框只在 placeholder 里给掩码', ph === '未填写' || ph.startsWith('当前密钥：'), ph)
   await page.screenshot({ path: path.join(OUT, 'settings.png') })
 
   // ---- 调试口 ----

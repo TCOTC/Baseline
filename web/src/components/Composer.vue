@@ -104,7 +104,7 @@ function hint(msg) {
   clearTimeout(hintTimer)
   hintTimer = setTimeout(() => {
     broke.value = false
-    if (inputEl.value) inputEl.value.placeholder = '刚做了什么？'
+    if (inputEl.value) inputEl.value.placeholder = '记录刚完成的事'
     grow()
   }, 4000)
 }
@@ -135,7 +135,7 @@ async function send() {
   // AI 能用就放它过去——内核会先落库，界面回头再叫它补判。
   if (missingPick() && !aiOn.value) {
     rulesLit.value = true
-    hint('选一条规则再记')
+    hint('请选择一条判定规则')
     return
   }
 
@@ -150,7 +150,7 @@ async function send() {
     grow()
     emit('created', res)
   } catch (e) {
-    hint('没记上：' + e.message)
+    hint('记录失败：' + e.message)
   } finally {
     busy.value = false
     focus()
@@ -213,7 +213,7 @@ watch(
   >
     <div v-show="menuOpen" id="gmenu" ref="menuEl" class="composer__menu">
       <p class="composer__menu-title">
-        这条记录推进了哪些目标？<span>可以多选，也可以一个都不选</span>
+        选择这条记录推进的目标<span>可多选，也可不选</span>
       </p>
       <button
         v-for="goal in goals"
@@ -229,7 +229,7 @@ watch(
       >
         <i class="composer__option-dot" />
         <span class="composer__option-label">{{ goal.title }}</span>
-        <em v-if="!goal.counts" class="composer__option-note">规则里没有手工打卡，记了也不动这条线</em>
+        <em v-if="!goal.counts" class="composer__option-note">无手工打卡规则，不计入曲线</em>
       </button>
     </div>
 
@@ -270,8 +270,8 @@ watch(
         class="composer__input"
         rows="2"
         maxlength="500"
-        placeholder="刚做了什么？"
-        aria-label="记一条"
+        placeholder="记录刚完成的事"
+        aria-label="记录内容"
         :disabled="busy"
         @input="grow"
         @keydown="onKey"
@@ -288,7 +288,7 @@ watch(
             :theme="goal.color"
             :selected="!!chosen[goal.id]"
             :dashed="!goal.counts"
-            :title="goal.title + (goal.counts ? '' : '（规则里没有手工打卡，记了也不动这条线）')"
+            :title="goal.title + (goal.counts ? '' : '（无手工打卡规则，不计入曲线）')"
             @click="toggle(goal.id)"
           >
             {{ goal.title }}
@@ -306,14 +306,14 @@ watch(
           …
         </button>
 
-        <AppButton type="submit" class="composer__submit" tabindex="-1">记下</AppButton>
+        <AppButton type="submit" class="composer__submit" tabindex="-1">记录</AppButton>
       </div>
     </div>
   </form>
 </template>
 
 <style scoped lang="scss">
-// 上下两层：上面写文本，下面一行左边是「记到哪个目标」、右边是「记下」。
+// 上下两层：上面写文本，下面一行左边是「记到哪个目标」、右边是「记录」。
 // 整个框是一个圆角矩形，里面全是无边框元素——边框和焦点态由框负责。
 .composer {
   flex: none;
