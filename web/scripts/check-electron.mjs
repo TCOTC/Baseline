@@ -34,6 +34,9 @@ try {
   ok('preload 桥在', await win.evaluate(() => !!(window.bl && window.bl.shell === 'electron')))
   ok('自绘顶栏在', (await win.locator('.bar').count()) === 1)
   ok('三个窗口按钮', (await win.locator('.bar .wbtn').count()) === 3)
+  // Windows 的标题栏按钮是方角；全局 button 底座不能把圆角漏过来。
+  const capRadius = await win.locator('#w-close').evaluate((el) => getComputedStyle(el).borderRadius)
+  ok('窗口按钮是方角', capRadius === '0px', capRadius)
 
   const [w] = app.windows()
   ok('窗口可缩放（无边框不等于不能拖）', await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isResizable()))

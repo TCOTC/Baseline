@@ -25,3 +25,43 @@ defineProps({
   </div>
   <div v-else class="cempty">这条线还没有任何记录</div>
 </template>
+
+<style scoped lang="scss">
+.cv {
+  width: 100%;
+  height: 44px;
+  display: block;
+  margin-bottom: var(--space-3);
+}
+
+.cv-line {
+  fill: none;
+  stroke: var(--goal-color);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.cv-base {
+  stroke: var(--goal-border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.cempty {
+  height: 44px;
+  margin-bottom: var(--space-3);
+  display: flex;
+  align-items: center;
+  font-size: var(--font-size-2);
+  color: var(--text-faint);
+  border-bottom: 1px dashed var(--goal-border);
+
+  // 「规则还没接线」和「还没有记录」用的是同一个位置，但说的不是一件事：
+  // 前者那条线现在算不出数，后者只是还没动。所以颜色也不一样。
+  &.unwired {
+    color: var(--amber-text);
+    border-bottom-color: var(--amber-border);
+  }
+}
+</style>

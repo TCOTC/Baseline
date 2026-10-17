@@ -1,0 +1,99 @@
+@use 'sass:list';
+
+// 设计令牌。
+//
+// 调色板用一份 map 同时生成颜色变量和 .blue 等类：7 套 × 4 个值。
+// 组件不关心是哪个色板——.blue 只把四个**角色变量**重定向过去：
+//   --goal-color / --goal-background / --goal-border / --goal-text
+$palettes: (
+  'blue': (#4a6fd4, #f0f4ff, #dce5fd, #2b3f7f),
+  'cyan': (#0f8f9b, #ecf9fa, #cbe9ec, #0a5560),
+  'green': (#0f9b7a, #eefaf6, #cdeee2, #0a5f4b),
+  'amber': (#c1871d, #fdf6ea, #f4e2bd, #7a5310),
+  'rose': (#b8477a, #fdf2f7, #f7d6e5, #71284b),
+  'violet': (#6d5bd0, #f3f1fe, #e2ddfb, #3f3480),
+  'slate': (#6b7280, #f4f5f7, #e3e5ea, #3f4550),
+);
+
+:root {
+  @each $name, $v in $palettes {
+    --#{$name}: #{list.nth($v, 1)};
+    --#{$name}-background: #{list.nth($v, 2)};
+    --#{$name}-border: #{list.nth($v, 3)};
+    --#{$name}-text: #{list.nth($v, 4)};
+  }
+
+  --background: #fafaf8;
+  --surface: #fff;
+  --surface-2: #f5f4f2;
+  --border: #ece9e3;
+  --border-strong: #e0dcd4;
+  --text: #1c1a17;
+  --text-muted: #6f6a62;
+  --text-faint: #a8a29a;
+  --timeline-line: #d8d1c5;
+  // 告警底色：没划边界、有记录没归到规则、表单错误。
+  --warning-background: #fffbeb;
+
+  --font-sans: "Inter", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, "Courier New", monospace;
+  // 系统图标字体。窗口按钮的四个字形和设置的齿轮都从这里来。
+  --font-icon: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+
+  // 字号：八档。不要再造 12.5px 这种中间值。
+  --font-size-1: 11px; // 元信息：时间、标签、说明
+  --font-size-2: 12px; // 次级
+  --font-size-3: 13px; // 正文
+  --font-size-4: 14px; // 根
+  --font-size-5: 15px; // 标题
+  --font-size-6: 20px; // 强调数字
+  --font-size-7: 28px; // 卡片数字 / 页面标题
+  --font-size-8: 56px; // 详情当前值
+
+  // 圆角：控件 / 面 / 胶囊。
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  // 间距：4 的倍数。
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  // 内容宽度与两侧留白。
+  --content-width: 1120px;
+  --page-padding: 30px;
+  --page-margin: max(0px, (100vw - var(--content-width)) / 2);
+
+  // 流水的行高。虚拟滚动读取它算总高和偏移，所以必须是固定值。
+  --row-height-day: 34px;
+  --row-height-entry: 46px;
+
+  // 窗口按钮。取值来自在真实 Windows 11 标题栏上取样。
+  --caption-ink: #0f1115;
+  --caption-hover: #d8d9da;
+  --caption-close: #e81123;
+  --caption-close-ink: #fff;
+  --caption-press: #c9cacb;
+  --caption-close-press: #f1707a;
+}
+
+// 目标色板：把四个角色变量重定向到当前调色板。
+@each $name, $v in $palettes {
+  .#{$name} {
+    --goal-color: var(--#{$name});
+    --goal-background: var(--#{$name}-background);
+    --goal-border: var(--#{$name}-border);
+    --goal-text: var(--#{$name}-text);
+  }
+}
+
+.none {
+  --goal-color: #a8a29a;
+  --goal-background: transparent;
+  --goal-border: #e0dcd4;
+  --goal-text: #78716c;
+}

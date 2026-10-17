@@ -259,8 +259,8 @@ function onKey(ev) {
         不划这条边界，那条曲线会假装在涨。）
       </p>
       <input ref="inputEl" v-model="inputVal" type="text" maxlength="120" placeholder="比如：在它上面写代码、改功能，不算" />
-      <div class="row" style="margin-bottom: 10px">
-        <button type="button" @click="skipBoundary">想不出来，先跳过</button>
+      <div class="row row-skip">
+        <button id="dlg-skip" type="button" @click="skipBoundary">想不出来，先跳过</button>
       </div>
       <div class="row">
         <button type="button" class="primary" @click="next">下一步</button>
@@ -276,7 +276,7 @@ function onKey(ev) {
       <button v-for="k in KINDS" :key="k.k" type="button" class="kind" @click="pickKind(k.k)">
         <b>{{ k.name }}</b><span>{{ k.desc }}</span>
       </button>
-      <div class="row" style="margin-top: 12px">
+      <div class="row row-cancel">
         <button type="button" @click="$emit('close')">取消</button>
       </div>
       <div v-if="d.problem" class="cur bad">{{ d.problem }}</div>
@@ -292,7 +292,7 @@ function onKey(ev) {
       <div v-if="!d.notrule" class="cur bad">
         没划边界。以后出现「看起来像在推进它、其实不算」的活动时，这条曲线会说谎——而它会理直气壮地涨。
       </div>
-      <div class="row" style="margin-top: 16px">
+      <div class="row row-confirm">
         <button type="button" class="primary" :disabled="busy" @click="create">建这个目标</button>
         <button type="button" @click="$emit('close')">取消</button>
       </div>
@@ -308,9 +308,150 @@ function onKey(ev) {
         </template>
         <template v-else>规则一写完就算出了数，说明它是可计算的。</template>
       </div>
-      <div class="row" style="margin-top: 16px">
+      <div class="row row-confirm">
         <button type="button" class="primary" @click="$emit('created')">好</button>
       </div>
     </template>
   </div>
 </template>
+
+<style scoped lang="scss">
+// 只占右栏。目标是在左栏的卡片列里诞生的，对话不该跳到一个和卡片无关的整屏页面去。
+.dlg {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-1) calc(var(--page-padding) + var(--page-margin)) var(--space-6) var(--space-1);
+
+  .dlg-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 22px;
+
+    div {
+      font-size: var(--font-size-2);
+      color: var(--text-faint);
+
+      &.done {
+        color: var(--text-muted);
+      }
+
+      &.now {
+        color: var(--text);
+        font-weight: bold;
+      }
+    }
+  }
+
+  h2 {
+    font-size: var(--font-size-5);
+    font-weight: bold;
+    margin-bottom: 6px;
+  }
+
+  p.note {
+    font-size: var(--font-size-3);
+    color: var(--text-faint);
+    margin-bottom: 14px;
+  }
+
+  .answer {
+    font-size: var(--font-size-3);
+    color: var(--text-muted);
+    margin-bottom: 4px;
+
+    b {
+      color: var(--text);
+      font-weight: bold;
+    }
+  }
+
+  input[type="text"] {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    font-size: var(--font-size-3);
+    color: var(--text);
+    outline: none;
+    margin-bottom: 12px;
+
+    &:focus {
+      border-color: var(--blue);
+    }
+  }
+
+  .row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  // 几个只差一点间距的动作行（内联 style 收进来的）。
+  .row-skip {
+    margin-bottom: var(--space-2);
+  }
+
+  .row-cancel {
+    margin-top: var(--space-3);
+  }
+
+  .row-confirm {
+    margin-top: var(--space-4);
+  }
+
+  // 通用按钮。**排除 .kind**：那是全局共享的来源按钮，scoped 的 `.dlg button`
+  // 会以更高优先级把它的内边距和排版盖掉。
+  button:not(.kind) {
+    &:hover {
+      border-color: var(--text-faint);
+      color: var(--text);
+    }
+
+    &.primary {
+      background: var(--surface-2);
+      color: var(--text);
+
+      &:hover {
+        border-color: var(--text-faint);
+      }
+    }
+
+    &[disabled] {
+      opacity: 0.45;
+
+      &:hover {
+        border-color: var(--border-strong);
+        color: var(--text-muted);
+      }
+    }
+  }
+
+  .cur {
+    margin-top: 14px;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    font-size: var(--font-size-3);
+    color: var(--text-muted);
+
+    b {
+      font-size: var(--font-size-6);
+      color: var(--text);
+      font-weight: bold;
+      font-variant-numeric: tabular-nums;
+      margin-right: 3px;
+    }
+  }
+
+  .bad {
+    border-color: var(--border-strong);
+    background: var(--surface-2);
+    color: var(--text-muted);
+  }
+}
+</style>

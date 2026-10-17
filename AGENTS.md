@@ -5,7 +5,7 @@
 ## 技术栈（2026-10-18 迁移后）
 
 - **内核与 HTTP 服务**：Go 1.24+，SQLite 用 `modernc.org/sqlite`（纯 Go，无 cgo）。
-- **界面**：Vue 3 + Vite（`web/`），开发时 HMR。
+- **界面**：Vue 3 + Vite + SCSS（`web/`），开发时 HMR；样式分全局层与组件 scoped 两层。
 - **外壳**：Electron 44（无边框窗口 + 自绘顶栏 + 托盘）。
 - 前端产物编进 Go 二进制（`internal/webui/dist`），所以**运行时只有一个 exe**。
 
@@ -43,6 +43,7 @@ node web/scripts/check-electron.mjs                        # 只跑 Electron 外
 | 一屏数据对不对（数字、待办数、AI 是否可用） | `GET /api/view` / `GET /__state` | 一次 HTTP |
 | 文案、DOM 结构、曲线路径 | `node web/scripts/check-ui.mjs`（Playwright） | 几秒，不用开窗口 |
 | 真实的排版和交互 | 上面那套的截图（`data/_ui/*.png`） | 读一张图 |
+| 改样式要证明「视觉没动」 | `node web/scripts/shots.mjs <目录>` 改前/改后各一次，比 SHA256 | 两次截图 |
 | 窗口按钮、托盘、关窗不退出 | `check-electron.mjs` | 几秒，会开一个窗口 |
 
 两条踩过的坑：
@@ -83,8 +84,18 @@ Invoke-RestMethod http://127.0.0.1:7717/__state | ConvertTo-Json -Depth 4
   包括「压根没挂目标」那种。
 - **数字和曲线同源**：`current` 和 `deltaWeek` 都取自快照序列，前端只负责显示。
 - **快照写了不再改写**（`INSERT OR IGNORE`），只有今天例外、每次重算。
-- **界面由 Vue 渲染，但行的 class 仍然全部来自 `web/src/assets/view.css`。**
-  零硬编码颜色，一律走 CSS 变量；SVG 内部类名带 `cv-` 前缀；数字 `tabular-nums`。
+- **界面由 Vue 渲染，样式分两层。** `web/src/styles/` 只放必须全局的东西：调色板
+  （`.blue` 加在容器上、后代读 `var(--goal-color)`，scoped 会拆断这条链）、流水行
+  （由 innerHTML 拼，scoped 匹配不到）、跨屏原语（`.detail`/`.hero`/`.dsec` 等）。
+  组件自己的样式写在 `<style scoped lang="scss">`，避免复制共享规则。
+  零硬编码颜色，一律走 CSS 变量；字号 / 圆角 / 间距走 `--font-size-*` / `--radius-*` / `--space-*`，
+  **不要再写 12.5px、9px 这种一次性取值**；数字 `tabular-nums`。
+  **`font-weight` 只有 `bold` / `normal` 两档，不写数字字重**——字重的细微差别看不出来，
+  只会让「谁该强调」变得含糊。
+  **`line-height` 只在真正参与定位的地方写**（大数字盒、图标字形），其余继承 body 的 1.55；
+  逐处调行高是最容易失控的一种「微调」。
+  **全局 `button` 不带圆角**：窗口按钮是方角（Windows 标题栏就是这样），圆角只给动作按钮。
+  **没有响应式断点**：这是桌面工具，窗口最小 880；浏览器验证也在这个宽度以上。
 - **mutation 之后重取整个 view model**（`GET /api/view`），不做乐观更新。
   卡片上的数字、曲线末端、流水行必须来自同一次计算。
 - **密钥明文不出内核。** 落库是密文，页面拿到的永远是掩码；掩码在 Go 里定死。

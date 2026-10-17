@@ -258,15 +258,16 @@ Electron 的体积是明码标价的：安装包一百多 MB、常驻内存一�
 ### 3. 零硬编码颜色
 
 所有颜色走 CSS 变量。目标色通过给容器加一个类（`.blue` / `.green` / …）注入，
-组件内部只写 `var(--c)`。新增一个目标只需分配一个色板，卡片、圆点、标签、曲线自动一致。
+组件内部只写 `var(--goal-color)`。新增一个目标只需分配一个色板，卡片、圆点、标签、曲线自动一致。
 
 另外两条从踩坑里得到的约定：
 
 - **SVG 内部类名必须加前缀**（`cv-line` / `cv-base` / `cv-dot`）。曾因 `.dot` 与时间线的
   `.dot` 撞车，CSS 把曲线末端的圆点拽出了坐标系。
 - **数字必须 `font-variant-numeric: tabular-nums`**。
-- **HTML 由 Vue 拼，但 class 仍然只能来自 `view.css`**；流水行的拼装是唯一一处
-  命令式 DOM（虚拟滚动要知道滚到哪儿了）。
+- **HTML 由 Vue 拼，样式分两层**：跨屏的令牌与原语在 `web/src/styles/`，
+  组件自己的样式写在各自的 `<style scoped lang="scss">` 里；只有流水行是命令式 DOM
+  （虚拟滚动要知道滚到哪儿了），它的样式必须留在全局层。
 
 ---
 
@@ -276,7 +277,7 @@ Electron 的体积是明码标价的：安装包一百多 MB、常驻内存一�
 |---|---|---|
 | 内核 | Go，单模块 | 更熟悉；编译快；纯 Go 可交叉编译 |
 | 存储 | `modernc.org/sqlite`（纯 Go） | 不需要 cgo，也不依赖系统 sqlite3.dll；单机数据量小，性能不是瓶颈 |
-| 界面 | Vue 3 + Vite | HMR；组件化；更熟悉 |
+| 界面 | Vue 3 + Vite + SCSS | HMR；组件化；样式就近，令牌仍在全局层 |
 | 外壳 | Electron | 先不处理 WebView 差异；DevTools 和 Playwright 直接可用 |
 | 通信 | 127.0.0.1 HTTP | 浏览器、Electron、AI 验证共用同一个地址 |
 
@@ -315,8 +316,9 @@ Baseline/
 │   └── webui/             前端产物 embed
 ├── web/                   Vue 3 + Vite + Electron
 │   ├── src/components/    三屏 + 流水 + 输入框 + 四个对话框
+│   ├── src/styles/        令牌、调色板、跨屏原语、流水（必须全局的那层）
 │   ├── electron/          main.cjs / preload.cjs
-│   └── scripts/           check-ui.mjs / check-electron.mjs
+│   └── scripts/           check-ui.mjs / check-electron.mjs / shots.mjs
 ├── assets/icons/          应用与托盘图标
 ├── scripts/               demo.ps1 / check.ps1
 └── data/                  运行时产物（已 gitignore）

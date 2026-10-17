@@ -21,14 +21,28 @@ Write-Output "── 构建 Go ──"
 go build -o bin/baseline.exe ./cmd/baseline
 if ($LASTEXITCODE -ne 0) { throw "go build 失败" }
 
-Write-Output "── 演示数据 ──"
-powershell -ExecutionPolicy Bypass -File scripts/demo.ps1 | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "演示数据生成失败" }
-
+# 端口检查必须在重置演示库之前：还开着的服务会锁住 _demo.db，
+# 那时候报「文件被占用」看不出真正的原因。
 $port = 7717
 if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
   throw "端口 $port 已被占用——先停掉那个服务再跑"
 }
+
+# 开发窗口（Electron + 随机端口的 Go）不占 7717，但会锁住演示库。
+# 独占打开一次，能打开才说明没人用着。
+$dbFile = Join-Path $root 'data\_demo.db'
+if (Test-Path $dbFile) {
+  try {
+    $fs = [System.IO.File]::Open($dbFile, 'Open', 'ReadWrite', 'None')
+    $fs.Close()
+  } catch {
+    throw "演示库正被占用（开发窗口还开着？）——先关掉它再跑"
+  }
+}
+
+Write-Output "── 演示数据 ──"
+powershell -ExecutionPolicy Bypass -File scripts/demo.ps1 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "演示数据生成失败" }
 
 $srv = Start-Process -FilePath (Join-Path $root 'bin\baseline.exe') `
   -ArgumentList @('--db', 'data\_demo.db', 'serve', '--port', "$port", '--debug') `

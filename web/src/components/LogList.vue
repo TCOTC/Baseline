@@ -4,7 +4,8 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 // 流水用**虚拟滚动**：几条到几千条都只画可见的那几十行。
 //
 // 这是全项目唯一一段命令式 DOM：它要知道滚到哪儿了、总高多少、该画哪几行。
-// 行的 class 仍然全部来自 view.css，所以样式还是只有一份——搬过来的只是拼装。
+// 行的样式在 styles/_log.scss（全局）——这些节点是 innerHTML 拼的，
+// scoped 样式加不上，样式仍然只有那一份。
 const props = defineProps({
   rows: { type: Array, default: () => [] },
   aiState: { type: Object, default: () => ({}) },
@@ -26,8 +27,8 @@ let pending = false
 
 function readHeights() {
   const cs = getComputedStyle(document.documentElement)
-  const d = parseFloat(cs.getPropertyValue('--row-day'))
-  const e = parseFloat(cs.getPropertyValue('--row-entry'))
+  const d = parseFloat(cs.getPropertyValue('--row-height-day'))
+  const e = parseFloat(cs.getPropertyValue('--row-height-entry'))
   // 解析不出来就退回默认值：宁可行高差几像素，也不要整条流水不显示。
   if (isFinite(d) && d > 0) ROW.d = d
   if (isFinite(e) && e > 0) ROW.e = e

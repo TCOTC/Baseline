@@ -140,7 +140,7 @@ async function onClear() {
             :placeholder="s.defaultBaseUrl"
             spellcheck="false"
           />
-          <div class="fhint">OpenAI 兼容的地址。DeepSeek、OpenAI、Moonshot、本机跑的模型都行。</div>
+          <div class="hint">OpenAI 兼容的地址。DeepSeek、OpenAI、Moonshot、本机跑的模型都行。</div>
         </div>
 
         <div class="field">
@@ -164,13 +164,13 @@ async function onClear() {
               {{ armed ? '再点一次' : '清掉' }}
             </button>
           </div>
-          <div class="fhint">只存在这台电脑上，不会发到别处。留空就是不改动现在这把。</div>
+          <div class="hint">只存在这台电脑上，不会发到别处。留空就是不改动现在这把。</div>
         </div>
 
         <div class="field">
           <label for="ai-th">多大把握才自动选 <b id="ai-th-v">{{ th }}</b></label>
           <input id="ai-th" v-model.number="th" type="range" min="0" max="100" step="5" />
-          <div class="fhint">没到这个把握就不替你决定，改成问你。定得越高，自动决定的越少。</div>
+          <div class="hint">没到这个把握就不替你决定，改成问你。定得越高，自动决定的越少。</div>
         </div>
 
         <div class="dacts">
@@ -183,3 +183,67 @@ async function onClear() {
     </div>
   </div>
 </template>
+
+<style scoped lang="scss">
+// 设置页：单栏、自己滚。**不复用 .panes 那个两栏网格**——设置只有一栏，
+// 套上去会在右边留一大片空白，看起来像内容没加载出来。
+.settings {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--space-5) var(--page-padding) var(--space-6);
+  scrollbar-gutter: stable;
+
+  .dsec {
+    max-width: 620px;
+    margin-bottom: var(--space-6);
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  .dacts {
+    margin-top: 20px;
+  }
+
+  // 滑块：用目标色，和页面上其他可操作的东西一个调子。
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--blue);
+    height: 22px;
+    padding: 0;
+  }
+}
+
+.frow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+
+  button {
+    flex: none;
+    color: var(--text-faint);
+
+    &:hover {
+      border-color: var(--rose);
+      color: var(--rose-text);
+    }
+
+    &[disabled] {
+      opacity: 0.4;
+
+      &:hover {
+        border-color: var(--border-strong);
+        color: var(--text-faint);
+      }
+    }
+
+    &.armed {
+      border-color: var(--rose);
+      color: var(--rose-text);
+    }
+  }
+}
+</style>

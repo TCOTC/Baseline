@@ -283,3 +283,287 @@ watch(
     </div>
   </form>
 </template>
+
+<style scoped lang="scss">
+// 上下两层：上面写文本，下面一行左边是「记到哪个目标」、右边是「记下」。
+// 整个框是一个圆角矩形，里面全是无边框元素——边框和焦点态由框负责。
+.composer {
+  flex: none;
+  position: relative;
+  padding: var(--space-3) calc(var(--page-padding) + var(--page-margin)) var(--space-4) 0;
+
+  .box {
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+
+    &:focus-within {
+      border-color: var(--blue);
+    }
+  }
+
+  textarea {
+    display: block;
+    width: 100%;
+    border: 0;
+    background: none;
+    outline: none;
+    resize: none;
+    font-size: var(--font-size-3);
+    color: var(--text);
+    padding: 2px 0 var(--space-2);
+    margin: 0;
+    // 高度由 JS 按内容撑，这里给个上限，免得一句话糊满半个窗口。
+    max-height: 160px;
+    overflow-y: auto;
+
+    &::placeholder {
+      color: var(--text-faint);
+    }
+  }
+
+  .crow {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  // 目标标签：列全所有目标，点一下选中、再点一下取消，可以多选。
+  // 一行放不下就整排收起来，只留「…」——由 JS 量完宽度决定。
+  .gchips {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    overflow: hidden;
+  }
+
+  .gchip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    padding: var(--space-1) var(--space-2);
+    color: var(--text-faint);
+    white-space: nowrap;
+
+    i {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex: none;
+      background: transparent;
+      box-shadow: inset 0 0 0 1.5px var(--border-strong);
+    }
+
+    &:hover {
+      border-color: var(--border-strong);
+      color: var(--text-muted);
+    }
+
+    // 选中：实心点 + 目标自己的底色。没选中的一律是空心点。
+    &.on {
+      background: var(--goal-background);
+      border-color: var(--goal-border);
+      color: var(--goal-text);
+      font-weight: bold;
+
+      i {
+        background: var(--goal-color);
+        box-shadow: none;
+      }
+    }
+
+    // 规则里没有手工打卡的目标：标签画成虚线，选得中但不计分。
+    &.noscore.on {
+      border-style: dashed;
+    }
+  }
+
+  .gmore {
+    flex: none;
+    border-radius: var(--radius-pill);
+    padding: var(--space-1) var(--space-2);
+    color: var(--text-faint);
+
+    &:hover {
+      border-color: var(--text-faint);
+      color: var(--text-muted);
+    }
+
+    &.on {
+      border-color: var(--goal-border);
+      background: var(--surface-2);
+      color: var(--text);
+    }
+  }
+
+  // 往上弹，不往下：下面是窗口边缘。
+  .gmenu {
+    position: absolute;
+    left: calc(var(--page-padding) + var(--page-margin));
+    bottom: 100%;
+    margin-bottom: var(--space-2);
+    min-width: 230px;
+    max-width: 420px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    padding: var(--space-2);
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .gmenu-h {
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--font-size-2);
+    color: var(--text-faint);
+
+    span {
+      display: block;
+      color: var(--text-faint);
+    }
+  }
+
+  .gopt {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    text-align: left;
+    border: 0;
+    padding: 7px 9px;
+
+    &:hover {
+      background: var(--surface-2);
+    }
+
+    &.on {
+      color: var(--text);
+      font-weight: bold;
+      background: var(--surface-2);
+    }
+
+    i {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex: none;
+      background: transparent;
+      box-shadow: inset 0 0 0 1.5px var(--border-strong);
+    }
+
+    &.on i {
+      background: var(--goal-color);
+      box-shadow: none;
+    }
+
+    &.noscore.on i {
+      background: transparent;
+      box-shadow: inset 0 0 0 2px var(--goal-color);
+    }
+
+    .gn {
+      flex: none;
+    }
+
+    em {
+      margin-left: auto;
+      padding-left: 10px;
+      font-style: normal;
+      font-size: var(--font-size-1);
+      color: var(--text-faint);
+      font-weight: normal;
+    }
+  }
+
+  // 规则气泡：在输入区上面、左对齐，和下面那排目标气泡分成两层。
+  // 形状是圆角矩形而不是胶囊：两种气泡长得一样的话，扫一眼分不清哪排是哪排。
+  .rules {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: 0 0 var(--space-2);
+
+    &.broke .rchip {
+      border-color: var(--rose);
+      color: var(--rose-text);
+    }
+  }
+
+  .rules-list {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+
+    > .rgroup:first-child {
+      margin-left: 0;
+    }
+  }
+
+  // 有多个目标时才写目标名，否则它就是噪音。
+  .rgroup {
+    font-size: var(--font-size-1);
+    color: var(--goal-text);
+    font-weight: bold;
+    flex: none;
+    margin-left: 4px;
+  }
+
+  .rchip {
+    padding: var(--space-1) 9px;
+    max-width: 260px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+
+    &:hover {
+      border-color: var(--text-faint);
+      color: var(--text);
+    }
+
+    &.on {
+      background: var(--goal-background);
+      border-color: var(--goal-border);
+      color: var(--goal-text);
+      font-weight: bold;
+    }
+  }
+
+  .send {
+    flex: none;
+
+    &:hover {
+      border-color: var(--text-faint);
+      color: var(--text);
+    }
+  }
+
+  &.busy {
+    .box,
+    .send {
+      opacity: 0.5;
+    }
+  }
+
+  // 提交失败时把框描红——只把按钮变灰会让人以为「点了没反应」。
+  &.broke {
+    .box {
+      border-color: var(--rose);
+    }
+
+    textarea::placeholder {
+      color: var(--rose-text);
+    }
+  }
+}
+</style>

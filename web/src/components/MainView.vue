@@ -109,3 +109,105 @@ function onCreated() {
     </div>
   </div>
 </template>
+
+<style scoped lang="scss">
+// 网格一直伸到窗口右边缘，右侧滚动条才贴得住窗口边；
+// 内容的 1120px 由左内边距和右栏滚动容器的内边距对齐。
+.cols {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 308px 1fr;
+  gap: calc(var(--page-padding) + var(--space-1));
+  padding: 10px 0 0 calc(var(--page-padding) + var(--page-margin));
+}
+
+// 左栏：卡片自己滚，「新建目标」钉在底部左下角。钉住而不是跟着滚——
+// 它是这一栏的入口，不该被三张卡挤出视野。
+.left {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.goals {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 12px;
+}
+
+// 底边距和输入框的 18px 对齐：左栏的加号和右栏那个框的底边应当落在同一条线上。
+.lfoot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-4);
+}
+
+.addgoal {
+  flex: none;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  border-style: dashed;
+  color: var(--text-faint);
+
+  svg {
+    display: block;
+    width: 11px;
+    height: 11px;
+  }
+
+  &:hover {
+    border-color: var(--text-faint);
+    color: var(--text-muted);
+  }
+}
+
+// 齿轮：和「新建目标」同一排、在它左边。用 Segoe Fluent Icons 的字符而不是画 SVG，
+// 和顶栏那三个按钮同一个理由（形状与 DPI 缩放交给 Windows）。
+.gear {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-faint);
+  font-family: var(--font-icon);
+  font-size: var(--font-size-5);
+  line-height: 1;
+  transform: translateZ(0);
+
+  &:hover {
+    color: var(--text-muted);
+  }
+}
+
+// 右栏一直伸到窗口右边缘。**内边距一律加在真正滚动/装内容的元素上**，
+// 不要加在 .right 上——加在父级会把 .log 整体往左推，滚动条跟着进来一百多像素。
+.right {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+// 左栏空了的时候不留一片白：告诉他一件事该怎么做，而且就在手边。
+.nogoal {
+  padding: 0 0 var(--space-2);
+  color: var(--text-faint);
+  font-size: var(--font-size-3);
+}
+
+// 待办提醒：排在卡片前面，清掉就没了。
+// 样式在 styles/_shared.scss 里（和详情页、表单的提醒共用一套）。
+</style>

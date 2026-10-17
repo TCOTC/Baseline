@@ -1,0 +1,204 @@
+// 流水行。**必须是全局样式**：行由 LogList.vue 里的 innerHTML 拼出来，
+// 那些节点不带 scoped 的属性，组件样式匹配不到。
+//
+// 行高是固定值——虚拟滚动靠它算总高和偏移，行高一变滚动位置就会飘，
+// 所以备注不换行、超长省略（悬停看全文）。
+
+.log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  // 右内边距加在滚动容器自己身上，滚动条才贴得住窗口右边缘。
+  padding: 0 calc(var(--page-padding) + var(--page-margin)) 16px 0;
+}
+
+// 虚拟滚动的画布：整条流水的高度撑在这里，可见的那几十行绝对定位在里面。
+.log-canvas {
+  position: relative;
+}
+
+.log-rows {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+}
+
+.log-hint {
+  padding: var(--space-5) var(--space-1);
+  color: var(--text-faint);
+  font-size: var(--font-size-3);
+}
+
+// 日期用的是和记录同一个 46px 时间列，右对齐：两条竖轴对齐之后，
+// 扫一列日期和扫一列时间才是同一个动作。
+.day {
+  height: var(--row-height-day);
+  display: grid;
+  grid-template-columns: 46px 22px 1fr auto;
+  gap: 10px;
+  align-items: end;
+  padding: 0 0 7px;
+}
+
+.entry {
+  height: var(--row-height-entry);
+  display: grid;
+  grid-template-columns: 46px 22px 1fr auto;
+  gap: 10px;
+  align-items: start;
+  padding-top: 6px;
+
+  .act {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.dlabel {
+  grid-column: 1 / 3;
+  width: max-content;
+}
+
+.dl {
+  width: 46px;
+  flex: none;
+  text-align: right;
+  font-size: var(--font-size-3);
+  font-weight: bold;
+}
+
+.dw {
+  margin-left: var(--space-2);
+  font-size: var(--font-size-2);
+  color: var(--text-faint);
+}
+
+.time {
+  font-size: var(--font-size-2);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  text-align: right;
+  padding-top: 2px;
+}
+
+// 竖线只在一组之内连起来：一组是「同一天」。
+.rail {
+  position: relative;
+  align-self: stretch;
+
+  &::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--timeline-line);
+    transform: translateX(-50%);
+  }
+
+  .dot {
+    position: absolute;
+    left: 50%;
+    top: 6px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--goal-color);
+    transform: translateX(-50%);
+    z-index: 1;
+
+    // 没关联目标的记录：空心点，安静但不隐藏。它确实发生过。
+    &.none {
+      background: var(--background);
+      box-shadow: inset 0 0 0 2px var(--border-strong);
+    }
+  }
+}
+
+.day + .entry .rail::before {
+  top: -6px;
+}
+
+.body {
+  .act {
+    font-size: var(--font-size-3);
+    font-weight: bold;
+  }
+
+  .sub {
+    font-size: var(--font-size-2);
+    color: var(--text-faint);
+    margin-top: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.entry.unlinked .act {
+  font-weight: normal;
+  color: var(--text-muted);
+}
+
+.tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.chip {
+  font-size: var(--font-size-1);
+  font-weight: bold;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--goal-background);
+  color: var(--goal-text);
+  border: 1px solid var(--goal-border);
+  white-space: nowrap;
+
+  &.none {
+    background: transparent;
+    color: var(--text-faint);
+    border-style: dashed;
+  }
+
+  // 挂着但这条规则不接受手工记录：虚线 + 说明。挂着 ≠ 计分。
+  &.noscore {
+    border-style: dashed;
+    background: transparent;
+    color: var(--text-faint);
+
+    &::after {
+      content: "·不计入";
+    }
+  }
+
+  // 后台补判还没回来：既不说计入也不说不计入——那两句话此刻都还不成立。
+  // 状态属于这一条记录，所以画在它的标签上，不画在输入框里。
+  &.pending {
+    border-style: dashed;
+    background: transparent;
+    color: var(--text-faint);
+
+    &::after {
+      content: "·分类中";
+    }
+  }
+}
+
+// 详情页的记录区不再是「页面里的一个盒子」，它就是这一栏本身。
+.dlog {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  padding-right: var(--page-padding);
+}

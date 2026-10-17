@@ -29,3 +29,69 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
     </div>
   </div>
 </template>
+
+<style scoped lang="scss">
+// 危险动作（删规则、删目标）一律走这里：把「要删的是什么」摆在眼前，
+// 代价是打断一次——删除值得这一次打断。
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(28, 26, 23, 0.32);
+}
+
+.mbox {
+  width: min(430px, calc(100vw - var(--page-padding) * 2));
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+
+  h3 {
+    font-size: var(--font-size-5);
+    font-weight: bold;
+    margin-bottom: 8px;
+  }
+
+  p {
+    font-size: var(--font-size-3);
+    color: var(--text-muted);
+  }
+
+  .mwhat {
+    margin-top: 12px;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+    font-size: var(--font-size-3);
+    color: var(--text-muted);
+    word-break: break-word;
+  }
+}
+
+.macts {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+
+  button {
+    &:hover {
+      border-color: var(--text-faint);
+      color: var(--text);
+    }
+
+    &.danger {
+      border-color: var(--rose);
+      color: var(--rose-text);
+
+      &:hover {
+        background: var(--rose-background);
+      }
+    }
+  }
+}
+</style>

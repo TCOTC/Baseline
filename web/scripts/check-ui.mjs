@@ -100,6 +100,25 @@ try {
   ok('/__state 能读到', !!state && state.goals.length === 3)
   ok('/__state 的数字和界面一致', state.goals[0].current === cardNow, state.goals[0].current)
 
+  // ---- 新建目标对话：五步骨架能走到底 ----
+  await page.click('.back')
+  await page.waitForSelector('.card')
+  await page.click('#addgoal')
+  await page.fill('#dlg input', '测试目标')
+  await page.press('#dlg input', 'Enter')
+  await page.waitForTimeout(60)
+  await page.press('#dlg input', 'Enter') // 「为什么是现在」可以不填
+  await page.waitForTimeout(60)
+  await page.fill('#dlg input', '读完一章算一次')
+  await page.press('#dlg input', 'Enter')
+  await page.waitForTimeout(60)
+  await page.click('#dlg-skip')
+  await page.waitForSelector('button.kind')
+  ok('建目标对话走到来源选择', (await page.locator('#dlg button.kind').count()) === 4)
+  await page.locator('#dlg button', { hasText: '取消' }).click()
+  await page.waitForSelector('#composer-input')
+  ok('取消后回到输入框', (await page.locator('#dlg').count()) === 0)
+
   ok('页面没有 JS 异常', errors.length === 0, errors.join(' | '))
 } catch (e) {
   fails.push('异常：' + e.message)

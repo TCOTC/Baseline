@@ -106,3 +106,30 @@ onBeforeUnmount(() => window.removeEventListener('popstate', onPop))
   </div>
   <ConfirmModal />
 </template>
+
+<style scoped lang="scss">
+// 读取失败时别给一片白：白屏和「今天什么都没发生」长得一模一样。
+.boot {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: var(--font-size-3);
+  padding: 40px;
+  text-align: center;
+
+  .bad {
+    color: var(--rose-text);
+  }
+
+  button {
+    margin-top: 14px;
+    padding: 7px 14px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+}
+</style>
