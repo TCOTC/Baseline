@@ -12,9 +12,12 @@
 ## 常用命令
 
 ```powershell
+.\dev.ps1                                                  # 开发环境：Electron 窗口 + Vite 热重载，Ctrl+C 收工
+.\dev.ps1 -Browser                                         # 同上，不起外壳，改开 http://127.0.0.1:7717
+.\dev.ps1 -Reset                                           # 同上，先重建演示库
 go test ./...                                              # 判定 / 归属 / 快照语义（<1 秒）
 go build -o bin/baseline.exe ./cmd/baseline                # 内核 + CLI + HTTP
-go run ./cmd/baseline --db data/_demo.db serve --port 7717 --debug
+go run ./cmd/baseline --db data/_demo.db serve --port 7717 --dev --debug  # 手动起（--dev 才会代理到 Vite）
 cd web; pnpm dev                                           # Vite :5173（改 Vue/CSS 即时生效）
 cd web; pnpm build                                         # 产物落进 internal/webui/dist
 powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # 演示数据，写 data/_demo.db
