@@ -3,11 +3,12 @@ defineProps({
   label: { type: String, required: true },
   forId: { type: String, default: '' },
   hint: { type: String, default: '' },
+  last: { type: Boolean, default: false },
 })
 </script>
 
 <template>
-  <div class="form-field">
+  <div class="form-field" :class="{ 'form-field--last': last }">
     <label class="form-field__label" :for="forId || undefined">{{ label }}</label>
     <slot />
     <p v-if="hint" class="form-field__hint">{{ hint }}</p>
@@ -17,6 +18,10 @@ defineProps({
 <style scoped lang="scss">
 .form-field {
   margin-bottom: var(--space-3);
+
+  &--last {
+    margin-bottom: 0;
+  }
 }
 
 .form-field__label {

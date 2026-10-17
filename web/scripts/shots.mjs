@@ -26,9 +26,14 @@ await page.screenshot({ path: path.join(OUT, 'goal.png') })
 await page.click('.back-link')
 await page.waitForSelector('.goal-card')
 await page.click('#gear')
-await page.waitForSelector('#ai-base')
+await page.waitForSelector('.settings-tabs')
 await page.waitForTimeout(150)
 await page.screenshot({ path: path.join(OUT, 'settings.png') })
+
+await page.click('#settings-tab-connection')
+await page.waitForSelector('#ai-base')
+await page.waitForTimeout(150)
+await page.screenshot({ path: path.join(OUT, 'settings-connection.png') })
 
 await browser.close()
 if (errors.length) {

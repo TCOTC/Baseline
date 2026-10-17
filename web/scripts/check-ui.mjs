@@ -95,7 +95,19 @@ try {
   await page.click('.back-link')
   await page.waitForSelector('.goal-card')
   await page.click('#gear')
+  await page.waitForSelector('.settings-tabs')
+  ok('设置页左侧有分类', (await page.locator('.settings-tabs__tab').count()) === 2)
+  ok(
+    '默认选中 AI 判定',
+    (await page.locator('.settings-tabs__tab--active').innerText()).includes('AI 判定'),
+  )
+  ok('AI 判定有分组', (await page.locator('#settings-panel-ai .settings-group').count()) >= 2)
+  await page.click('#settings-tab-connection')
   await page.waitForSelector('#ai-base')
+  ok(
+    '接口与密钥有分组',
+    (await page.locator('#settings-panel-connection .settings-group').count()) >= 2,
+  )
   ok('设置页有接口地址', (await page.inputValue('#ai-base')).length > 0)
   ok('设置页有模型名', (await page.inputValue('#ai-model')).length > 0)
   ok('密钥框是空的（明文不回显）', (await page.inputValue('#ai-key')) === '')

@@ -94,7 +94,7 @@ function onCreated() {
           id="gear"
           type="button"
           class="main-view__settings"
-          title="设置（AI 判定）"
+          title="设置"
           aria-label="设置"
           @click="emit('nav', '?settings=1')"
         >
