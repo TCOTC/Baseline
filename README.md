@@ -262,12 +262,13 @@ Electron 的体积是明码标价的：安装包一百多 MB、常驻内存一�
 
 另外两条从踩坑里得到的约定：
 
-- **SVG 内部类名必须加前缀**（`cv-line` / `cv-base` / `cv-dot`）。曾因 `.dot` 与时间线的
-  `.dot` 撞车，CSS 把曲线末端的圆点拽出了坐标系。
+- **曲线是独立组件**（`CurveView`）：阶梯线不做插值，数字和 path 都来自服务端。
 - **数字必须 `font-variant-numeric: tabular-nums`**。
-- **HTML 由 Vue 拼，样式分两层**：跨屏的令牌与原语在 `web/src/styles/`，
-  组件自己的样式写在各自的 `<style scoped lang="scss">` 里；只有流水行是命令式 DOM
-  （虚拟滚动要知道滚到哪儿了），它的样式必须留在全局层。
+- **样式分两层**：全局只留令牌、重置和调色板（`[data-theme]` 只能靠继承）；
+  其余全部写在组件的 `<style scoped lang="scss">` 里。跨屏复用做成组件
+  （`AppButton` / `FormField` / `AppSection` / `Notice` / `PageShell` / `ToggleChip`），
+  跨屏复用做成组件，不用全局类名共享。流水是 Vue 虚拟列表（`LogList` + `LogDayRow` +
+  `LogEntryRow`），只渲染可见的几十行。
 
 ---
 
@@ -281,21 +282,21 @@ Electron 的体积是明码标价的：安装包一百多 MB、常驻内存一�
 | 外壳 | Electron | 先不处理 WebView 差异；DevTools 和 Playwright 直接可用 |
 | 通信 | 127.0.0.1 HTTP | 浏览器、Electron、AI 验证共用同一个地址 |
 
-**为什么不是「内核 + Tauri」了**：判定、归属、快照这些语义已经稳定，
+**为什么是「内核 + Web 界面」而不是 Tauri**：判定、归属、快照这些语义稳定，
 剩下的迭代几乎全在界面上；而界面迭代最贵的是「改一行、重启窗口、截图量像素」。
-换成 Vite 之后那一步变成几十毫秒。**这次迁移买的是开发循环，不是运行时。**
+Vite 的 HMR 把这一步压到几十毫秒。**买的是开发循环，不是运行时。**
 
-**为什么 SQLite 用纯 Go 驱动**：`rusqlite` 那一版是 bundled C，需要 cgo/现场编译。
+**为什么 SQLite 用纯 Go 驱动**：bundled C 的绑定需要 cgo/现场编译。
 纯 Go 驱动冷编译稍慢、产物大几 MB，但增量构建和交叉编译都简单；
 单用户几千行数据，性能差异感觉不到。
 （实测：modernc 冷编译 7 秒、增量 0.3 秒、9.5 MB；ncruces 的 WASM 方案冷编译 15 秒、
 13.4 MB，所以选了前者。）
 
-**为什么界面是 Vue 而不是服务端拼 HTML**：旧版用字符串拼整页，好处是「一个渲染器」；
-代价是任何交互都要整页重载，而且验证只能靠截图。现在 Vue 只负责画，
-**数字、曲线路径、甚至「+3 / 持平」都仍由 Go 算好**——渲染器换了，判定口径没换。
+**为什么界面是 Vue 而不是服务端拼 HTML**：服务端拼整页的好处是「一个渲染器」；
+代价是任何交互都要整页重载，而且验证只能靠截图。Vue 只负责画，
+**数字、曲线路径、甚至「+3 / 持平」都仍由 Go 算好**——渲染器与判定口径分离。
 
-**为什么不保留旧版的调试桥**：它能在页面里执行任意 JS，而那正是 Playwright 的
+**为什么页面里没有调试桥**：能执行任意 JS 的桥，正是 Playwright 的
 `page.evaluate` 天生就会的事。少一个常开的入口，就少一条攻击面。
 
 ---
@@ -316,7 +317,7 @@ Baseline/
 │   └── webui/             前端产物 embed
 ├── web/                   Vue 3 + Vite + Electron
 │   ├── src/components/    三屏 + 流水 + 输入框 + 四个对话框
-│   ├── src/styles/        令牌、调色板、跨屏原语、流水（必须全局的那层）
+│   ├── src/styles/        令牌、重置、调色板（全局只有这三样）
 │   ├── electron/          main.cjs / preload.cjs
 │   └── scripts/           check-ui.mjs / check-electron.mjs / shots.mjs
 ├── assets/icons/          应用与托盘图标

@@ -17,8 +17,8 @@ var dist embed.FS
 
 // Handler 返回 SPA 的静态文件处理器。
 //
-// 所有未知路径都回 index.html：这一版的路由是查询串（?goal=N / ?settings=1），
-// 但刷新、直接粘贴链接进来都不该 404。
+// 所有未知路径都回 index.html：路由是查询串（?goal=N / ?settings=1），
+// 刷新、直接粘贴链接进来都不该 404。
 func Handler() http.Handler {
 	sub, err := fs.Sub(dist, "dist")
 	if err != nil {

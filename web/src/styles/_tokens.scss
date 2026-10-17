@@ -2,8 +2,8 @@
 
 // 设计令牌。
 //
-// 调色板用一份 map 同时生成颜色变量和 .blue 等类：7 套 × 4 个值。
-// 组件不关心是哪个色板——.blue 只把四个**角色变量**重定向过去：
+// 调色板用一份 map 同时生成颜色变量和 [data-theme] 规则：7 套 × 4 个值。
+// 组件不关心是哪个色板——[data-theme] 只把四个**角色变量**重定向过去：
 //   --goal-color / --goal-background / --goal-border / --goal-text
 $palettes: (
   'blue': (#4a6fd4, #f0f4ff, #dce5fd, #2b3f7f),
@@ -82,8 +82,9 @@ $palettes: (
 }
 
 // 目标色板：把四个角色变量重定向到当前调色板。
+// 用 data-theme 而不是类名：颜色靠继承，任何组件根节点都能直接带上，不用记类名。
 @each $name, $v in $palettes {
-  .#{$name} {
+  [data-theme="#{$name}"] {
     --goal-color: var(--#{$name});
     --goal-background: var(--#{$name}-background);
     --goal-border: var(--#{$name}-border);
@@ -91,7 +92,7 @@ $palettes: (
   }
 }
 
-.none {
+[data-theme="none"] {
   --goal-color: #a8a29a;
   --goal-background: transparent;
   --goal-border: #e0dcd4;

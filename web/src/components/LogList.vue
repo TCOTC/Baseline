@@ -1,162 +1,93 @@
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import LogDayRow from './LogDayRow.vue'
+import LogEntryRow from './LogEntryRow.vue'
 
-// 流水用**虚拟滚动**：几条到几千条都只画可见的那几十行。
+// 流水用**虚拟滚动**：只渲染可见的几十行，几千条也不卡。
 //
-// 这是全项目唯一一段命令式 DOM：它要知道滚到哪儿了、总高多少、该画哪几行。
-// 行的样式在 styles/_log.scss（全局）——这些节点是 innerHTML 拼的，
-// scoped 样式加不上，样式仍然只有那一份。
+// 可见行由 LogDayRow / LogEntryRow 渲染，行的样式也在各自组件里；
+// 这里只管滚动位置、可见区切片和 translateY。
 const props = defineProps({
   rows: { type: Array, default: () => [] },
   aiState: { type: Object, default: () => ({}) },
-  variant: { type: String, default: 'log' }, // log | dlog
+  variant: { type: String, default: 'main' }, // main | detail
   visible: { type: Boolean, default: true },
-  // 详情页的空状态自己写在 .dlog 外面（和旧版一样），这里就不再画一条。
   showEmpty: { type: Boolean, default: true },
 })
 
-const logEl = ref(null)
-const canvasEl = ref(null)
-const rowsEl = ref(null)
-
-const ROW = { d: 34, e: 46 }
+const viewport = ref(null)
+const scrollTop = ref(0)
+const viewportHeight = ref(0)
+const dayHeight = ref(34)
+const entryHeight = ref(46)
 const OVERSCAN = 8
-let offsets = []
-let lastKey = ''
-let pending = false
 
-function readHeights() {
-  const cs = getComputedStyle(document.documentElement)
-  const d = parseFloat(cs.getPropertyValue('--row-height-day'))
-  const e = parseFloat(cs.getPropertyValue('--row-height-entry'))
-  // 解析不出来就退回默认值：宁可行高差几像素，也不要整条流水不显示。
-  if (isFinite(d) && d > 0) ROW.d = d
-  if (isFinite(e) && e > 0) ROW.e = e
-}
-
-const rowHeight = (r) => (r.k === 'd' ? ROW.d : ROW.e)
-
-function esc(s) {
-  return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
-}
-
-function rowHtml(r) {
-  if (r.k === 'd') {
-    // 具体年月日在 title 上，悬停才出现。看得见的是「哪天」+「周几」。
-    return (
-      '<div class="day"><div class="dlabel" title="' + esc(r.title || '') + '">' +
-      '<span class="dl">' + esc(r.label) + '</span>' +
-      (r.wd ? '<span class="dw">' + esc(r.wd) + '</span>' : '') +
-      '</div></div>'
-    )
+const offsets = computed(() => {
+  const out = new Array(props.rows.length + 1)
+  out[0] = 0
+  for (let i = 0; i < props.rows.length; i++) {
+    out[i + 1] = out[i] + (props.rows[i].k === 'd' ? dayHeight.value : entryHeight.value)
   }
+  return out
+})
 
-  const st = props.aiState[r.id] || null
-  const wait = !!(st && st.wait)
-  const note = st && st.note ? st.note : ''
-
-  // 一条记录可以挂多个目标。挂着的都列出来；`counts` 为假表示这条规则
-  // 不接受手工记录——标签画成虚线并说明。
-  let tags = (r.goals || [])
-    .map((g) => {
-      // 补判还没回来时不下结论：既不说「计入」，也不说「不计入」。
-      const no = g.counts || wait ? '' : ' noscore'
-      const pend = wait ? ' pending' : ''
-      const tip = g.counts ? (g.byAi ? 'AI 挑的规则' : '') : '这条规则不接受手工记录，记了也不动这条线'
-      return (
-        '<span class="chip ' + esc(g.color) + no + pend + '"' +
-        (tip ? ' title="' + esc(tip) + '"' : '') + '>' + esc(g.title) + '</span>'
-      )
-    })
-    .join('')
-  // **先判空，再补那句兜底标签。** 顺序反了的话 `none` 永远算不出来，
-  // 没关联目标的行就不会被画成虚线（踩过一次）。
-  const none = tags ? '' : ' unlinked'
-  if (!tags) {
-    tags = wait
-      ? '<span class="chip none pending">还没关联目标</span>'
-      : '<span class="chip none">没关联目标</span>'
-  }
-
-  let sub = r.sub || ''
-  if (wait) sub += ' • AI 正在分类…'
-  else if (note) sub += ' • ' + note
-
-  const dot = (r.goals && r.goals[0] && r.goals[0].color) || 'none'
-  return (
-    '<div class="entry' + none + '">' +
-    '<div class="time">' + esc(r.time) + '</div>' +
-    '<div class="rail"><span class="dot ' + esc(dot) + '"></span></div>' +
-    '<div class="body">' +
-    '<div class="act" title="' + esc(r.text) + '">' + esc(r.text) + '</div>' +
-    '<div class="sub" title="' + esc(sub) + '">' + esc(sub) + '</div>' +
-    '</div>' +
-    '<div class="tags">' + tags + '</div></div>'
-  )
-}
-
-function build() {
-  const list = props.rows
-  offsets = new Array(list.length + 1)
-  offsets[0] = 0
-  for (let i = 0; i < list.length; i++) offsets[i + 1] = offsets[i] + rowHeight(list[i])
-  if (canvasEl.value) canvasEl.value.style.height = offsets[list.length] + 'px'
-}
+const totalHeight = computed(() => offsets.value[props.rows.length] || 0)
 
 function indexAt(y) {
+  const table = offsets.value
   let lo = 0
   let hi = props.rows.length
   while (lo < hi) {
     const mid = (lo + hi) >> 1
-    if (offsets[mid + 1] <= y) lo = mid + 1
+    if (table[mid + 1] <= y) lo = mid + 1
     else hi = mid
   }
   return Math.max(0, Math.min(lo, props.rows.length - 1))
 }
 
-function paint() {
-  if (!rowsEl.value || !logEl.value) return
-  if (!props.rows.length) return
-  if (!offsets.length) build()
-  const top = logEl.value.scrollTop
-  const vh = logEl.value.clientHeight
-  const start = Math.max(0, indexAt(top) - OVERSCAN)
-  const end = Math.min(props.rows.length, indexAt(top + vh) + 1 + OVERSCAN)
-  const key = start + ':' + end
-  if (key === lastKey) return
-  lastKey = key
-  let html = ''
-  for (let i = start; i < end; i++) html += rowHtml(props.rows[i])
-  rowsEl.value.style.transform = 'translateY(' + offsets[start] + 'px)'
-  rowsEl.value.innerHTML = html
+const start = computed(() => Math.max(0, indexAt(scrollTop.value) - OVERSCAN))
+const end = computed(() =>
+  Math.min(props.rows.length, indexAt(scrollTop.value + viewportHeight.value) + 1 + OVERSCAN),
+)
+const visibleRows = computed(() => props.rows.slice(start.value, end.value))
+const offsetY = computed(() => offsets.value[start.value] || 0)
+
+// 行高只有 CSS 一处定义。解析不出来就退回默认值：
+// 宁可行高差几像素，也不要整条流水不显示。
+function readHeights() {
+  const styles = getComputedStyle(document.documentElement)
+  const day = parseFloat(styles.getPropertyValue('--row-height-day'))
+  const entry = parseFloat(styles.getPropertyValue('--row-height-entry'))
+  if (isFinite(day) && day > 0) dayHeight.value = day
+  if (isFinite(entry) && entry > 0) entryHeight.value = entry
 }
 
-function schedule() {
-  if (pending) return
-  pending = true
-  requestAnimationFrame(() => {
-    pending = false
-    paint()
+function measure() {
+  if (!viewport.value) return
+  viewportHeight.value = viewport.value.clientHeight
+  scrollTop.value = viewport.value.scrollTop
+}
+
+let frame = 0
+function onScroll() {
+  if (frame) return
+  frame = requestAnimationFrame(() => {
+    frame = 0
+    measure()
   })
 }
 
 function scrollToBottom() {
-  if (!logEl.value) return
-  logEl.value.scrollTop = logEl.value.scrollHeight
-  paint()
-}
-
-function refresh() {
-  build()
-  lastKey = ''
-  paint()
+  if (!viewport.value) return
+  viewport.value.scrollTop = viewport.value.scrollHeight
+  scrollTop.value = viewport.value.scrollTop
 }
 
 watch(
   () => props.rows,
   () => {
     nextTick(() => {
-      refresh()
+      measure()
       scrollToBottom()
     })
   },
@@ -164,51 +95,85 @@ watch(
 )
 
 watch(
-  () => props.aiState,
-  () => {
-    lastKey = ''
-    paint()
-  },
-  { deep: true },
-)
-
-watch(
   () => props.visible,
   (on) => {
     if (!on) return
     nextTick(() => {
-      refresh()
+      measure()
       scrollToBottom()
     })
   },
 )
 
-function onResize() {
-  lastKey = ''
-  schedule()
-}
-
 onMounted(() => {
   readHeights()
   nextTick(() => {
-    refresh()
+    measure()
     scrollToBottom()
   })
-  window.addEventListener('resize', onResize)
+  window.addEventListener('resize', measure)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', onResize)
+  window.removeEventListener('resize', measure)
+  if (frame) cancelAnimationFrame(frame)
 })
 </script>
 
 <template>
-  <div ref="logEl" id="log" :class="variant" @scroll="schedule">
-    <div v-if="!rows.length && showEmpty" class="log-hint">
+  <div
+    ref="viewport"
+    id="log"
+    class="log"
+    :class="{ 'log--detail': variant === 'detail' }"
+    @scroll="onScroll"
+  >
+    <p v-if="!rows.length && showEmpty" class="log__empty">
       <slot name="empty">还没有任何记录。<br />下面那个输入框里写一句，回车——记的是「刚做了什么」。</slot>
-    </div>
-    <div v-else-if="rows.length" ref="canvasEl" class="log-canvas">
-      <div ref="rowsEl" class="log-rows"></div>
+    </p>
+
+    <div v-else-if="rows.length" class="log__canvas" :style="{ height: totalHeight + 'px' }">
+      <div class="log__rows" :style="{ transform: `translateY(${offsetY}px)` }">
+        <template v-for="row in visibleRows" :key="row.k === 'd' ? 'day:' + row.title : 'entry:' + row.id">
+          <LogDayRow v-if="row.k === 'd'" :row="row" />
+          <LogEntryRow v-else :row="row" :state="aiState[row.id]" />
+        </template>
+      </div>
     </div>
   </div>
 </template>
+
+<style scoped lang="scss">
+.log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  // 右内边距加在滚动容器自己身上，滚动条才贴得住这一栏的右边缘。
+  padding: 0 0 var(--space-4) 0;
+}
+
+// 详情页的记录区就是这一栏本身。
+.log--detail {
+  padding-right: var(--page-padding);
+}
+
+// 虚拟滚动的画布：整条流水的高度撑在这里，可见的那几十行绝对定位在里面。
+.log__canvas {
+  position: relative;
+}
+
+.log__rows {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+}
+
+.log__empty {
+  padding: var(--space-5) var(--space-1);
+  color: var(--text-faint);
+  font-size: var(--font-size-3);
+}
+</style>

@@ -9,32 +9,19 @@ body {
   height: 100%;
 }
 
-// 整页不滚动，滚动交给左右两栏各自负责：一列是「三条曲线的现状」，
-// 一列是「这些天做过什么」，长度差得很远。
 body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--background);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--font-size-4);
   line-height: 1.55;
-  -webkit-font-smoothing: antialiased;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
 
-// Vue 挂在 #app 上，而 body 是 flex 容器——中间这一层必须也参与布局，
-// 否则 .wrap 拿不到受限高度：左右两栏不再各自滚动，输入框会被顶出屏幕。
 #app {
   height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.wrap {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
   display: flex;
   flex-direction: column;
 }
@@ -44,16 +31,13 @@ a {
   text-decoration: none;
 }
 
-// 控件统一从一套默认值出发。**故意不带圆角**：窗口按钮要方角，
-// 菜单行、标签各有各的形状；圆角交给真正需要它的那几类按钮自己声明。
+// 只重置原生外观，不规定形状：窗口按钮要方角，标签是胶囊，
+// 动作按钮走 AppButton——把圆角、边框写进全局，迟早漏到不该有的地方。
 button {
   font: inherit;
-  font-size: var(--font-size-2);
-  color: var(--text-muted);
-  background: none;
-  border: 1px solid var(--border-strong);
-  padding: var(--space-2) var(--space-4);
   cursor: default;
+  background: none;
+  border: 0;
 }
 
 input,
@@ -61,7 +45,3 @@ textarea {
   font: inherit;
   color: var(--text);
 }
-
-// 滚动条用系统默认的：为了「细一点、圆一点」写十几条 ::-webkit-scrollbar
-// 不值得，而且每多一个能滚的容器就要记得补一条。
-

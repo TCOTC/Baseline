@@ -1,6 +1,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../api.js'
+import AppButton from './AppButton.vue'
+import ToggleChip from './ToggleChip.vue'
 
 const props = defineProps({
   composer: { type: Object, default: null },
@@ -20,7 +22,6 @@ const overflow = ref(false)
 const inputEl = ref(null)
 const chipsEl = ref(null)
 const menuEl = ref(null)
-const formEl = ref(null)
 
 const goals = computed(() => (props.composer ? props.composer.goals : []))
 const ruleMap = computed(() => (props.composer ? props.composer.rules : {}))
@@ -30,9 +31,9 @@ const selected = computed(() => Object.keys(chosen).filter((k) => chosen[k]).map
 const groups = computed(() =>
   selected.value
     .map((gid) => {
-      const r = ruleMap.value[gid]
-      if (!r || !r.sources || !r.sources.length) return null
-      return { goal: gid, title: r.title, color: r.color, auto: r.auto, list: r.sources }
+      const rule = ruleMap.value[gid]
+      if (!rule || !rule.sources || !rule.sources.length) return null
+      return { goal: gid, title: rule.title, color: rule.color, auto: rule.auto, list: rule.sources }
     })
     .filter(Boolean),
 )
@@ -41,20 +42,20 @@ const many = computed(() => groups.value.length > 1)
 
 function missingPick() {
   for (const gid of selected.value) {
-    const r = ruleMap.value[gid]
-    if (r && r.sources.length > 1 && !picked[gid]) return gid
+    const rule = ruleMap.value[gid]
+    if (rule && rule.sources.length > 1 && !picked[gid]) return gid
   }
   return null
 }
 
 // 选中目标之后，每个目标都会先按内核算出的 auto 预置一条——
-// **能唯一确定的那条直接就是选中的状态**，于是它在按下回车前就看得见。
+// 能唯一确定的那条直接就是选中的状态，于是它在按下回车前就看得见。
 function refreshPicks() {
-  for (const k of Object.keys(picked)) {
-    if (!chosen[k]) delete picked[k]
+  for (const key of Object.keys(picked)) {
+    if (!chosen[key]) delete picked[key]
   }
-  for (const g of groups.value) {
-    if (g.auto && !picked[g.goal]) picked[g.goal] = g.auto
+  for (const group of groups.value) {
+    if (group.auto && !picked[group.goal]) picked[group.goal] = group.auto
   }
   if (!missingPick()) rulesLit.value = false
 }
@@ -119,7 +120,7 @@ function focus() {
 }
 
 function onKey(ev) {
-  // 中文输入法选词时的回车不能当成提交：`isComposing` 在候选框里是真的。
+  // 中文输入法选词时的回车不能当成提交：isComposing 在候选框里是真的。
   if (ev.key === 'Enter' && !ev.shiftKey) {
     if (ev.isComposing || ev.keyCode === 229) return
     ev.preventDefault()
@@ -130,7 +131,7 @@ function onKey(ev) {
 async function send() {
   const note = text.value.trim()
   if (!note || busy.value) return
-  // 两条规则都能收这条记录时必须先指认，但**只在没人接手的时候**才拦：
+  // 两条规则都能收这条记录时必须先指认，但只在没人接手的时候才拦：
   // AI 能用就放它过去——内核会先落库，界面回头再叫它补判。
   if (missingPick() && !aiOn.value) {
     rulesLit.value = true
@@ -139,8 +140,8 @@ async function send() {
   }
 
   const picks = Object.keys(picked)
-    .filter((k) => chosen[k])
-    .map((k) => [Number(k), picked[k]])
+    .filter((key) => chosen[key])
+    .map((key) => [Number(key), picked[key]])
 
   busy.value = true
   try {
@@ -203,56 +204,70 @@ watch(
 <template>
   <form
     v-if="composer"
-    ref="formEl"
     id="composer"
     v-show="visible"
     class="composer"
-    :class="{ busy, broke }"
+    :class="{ 'composer--busy': busy, 'composer--invalid': broke }"
     autocomplete="off"
     @submit.prevent="send"
   >
-    <div v-show="menuOpen" id="gmenu" ref="menuEl" class="gmenu">
-      <div class="gmenu-h">这条记录推进了哪些目标？<span>可以多选，也可以一个都不选</span></div>
+    <div v-show="menuOpen" id="gmenu" ref="menuEl" class="composer__menu">
+      <p class="composer__menu-title">
+        这条记录推进了哪些目标？<span>可以多选，也可以一个都不选</span>
+      </p>
       <button
-        v-for="g in goals"
-        :key="g.id"
+        v-for="goal in goals"
+        :key="goal.id"
         type="button"
-        class="gopt"
-        :class="[g.color, { on: chosen[g.id], noscore: !g.counts }]"
-        @click="toggle(g.id)"
+        class="composer__option"
+        :class="{
+          'composer__option--selected': chosen[goal.id],
+          'composer__option--noscore': !goal.counts,
+        }"
+        :data-theme="goal.color"
+        @click="toggle(goal.id)"
       >
-        <i></i><span class="gn">{{ g.title }}</span>
-        <em v-if="!g.counts">规则里没有手工打卡，记了也不动这条线</em>
+        <i class="composer__option-dot" />
+        <span class="composer__option-label">{{ goal.title }}</span>
+        <em v-if="!goal.counts" class="composer__option-note">规则里没有手工打卡，记了也不动这条线</em>
       </button>
     </div>
 
-    <!-- 规则气泡在输入框**外面**、它的上面，左对齐，和下面那排目标气泡分成两层：
+    <!-- 规则气泡在输入框外面、它的上面，左对齐：
          上面是「这条记录算在哪条规则上」，下面是「它推进了哪些目标」。
          不弹浮层——浮层会盖住流水，而这件事需要在打字的时候一直看得见。 -->
-    <div v-show="groups.length" id="rules" class="rules" :class="{ many, broke: rulesLit }">
-      <div id="rules-list" class="rules-list">
-        <template v-for="g in groups" :key="g.goal">
-          <span v-if="many" class="rgroup" :class="g.color">{{ g.title }}</span>
-          <button
-            v-for="s in g.list"
-            :key="s.id"
+    <div
+      v-show="groups.length"
+      id="rules"
+      class="composer__rules"
+      :class="{ 'composer__rules--many': many, 'composer__rules--invalid': rulesLit }"
+    >
+      <div id="rules-list" class="composer__rule-list">
+        <template v-for="group in groups" :key="group.goal">
+          <span v-if="many" class="composer__rule-group" :data-theme="group.color">{{ group.title }}</span>
+          <ToggleChip
+            v-for="source in group.list"
+            :key="source.id"
+            as="button"
             type="button"
-            class="rchip"
-            :class="[g.color, { on: picked[g.goal] === s.id }]"
-            :title="'规则 #' + s.id + '：' + s.what"
-            @click="togglePick(g.goal, s.id)"
+            shape="rect"
+            :theme="group.color"
+            :selected="picked[group.goal] === source.id"
+            :title="'规则 #' + source.id + '：' + source.what"
+            @click="togglePick(group.goal, source.id)"
           >
-            {{ s.what }}
-          </button>
+            {{ source.what }}
+          </ToggleChip>
         </template>
       </div>
     </div>
 
-    <div class="box">
+    <div class="composer__box">
       <textarea
         ref="inputEl"
         id="composer-input"
         v-model="text"
+        class="composer__input"
         rows="2"
         maxlength="500"
         placeholder="刚做了什么？"
@@ -260,25 +275,38 @@ watch(
         :disabled="busy"
         @input="grow"
         @keydown="onKey"
-      ></textarea>
-      <div class="crow">
-        <div ref="chipsEl" id="gchips" v-show="!overflow" class="gchips">
-          <button
-            v-for="g in goals"
-            :key="g.id"
+      />
+
+      <div class="composer__row">
+        <div ref="chipsEl" id="gchips" v-show="!overflow" class="composer__chips">
+          <ToggleChip
+            v-for="goal in goals"
+            :key="goal.id"
+            as="button"
             type="button"
-            class="gchip"
-            :class="[g.color, { on: chosen[g.id], noscore: !g.counts }]"
-            :title="g.title + (g.counts ? '' : '（规则里没有手工打卡，记了也不动这条线）')"
-            @click="toggle(g.id)"
+            dot
+            :theme="goal.color"
+            :selected="!!chosen[goal.id]"
+            :dashed="!goal.counts"
+            :title="goal.title + (goal.counts ? '' : '（规则里没有手工打卡，记了也不动这条线）')"
+            @click="toggle(goal.id)"
           >
-            <i></i>{{ g.title }}
-          </button>
+            {{ goal.title }}
+          </ToggleChip>
         </div>
-        <button v-show="overflow" id="gmore" type="button" class="gmore" :class="{ on: menuOpen }" @click="menuOpen = !menuOpen">
+
+        <button
+          v-show="overflow"
+          id="gmore"
+          type="button"
+          class="composer__more"
+          :class="{ 'composer__more--open': menuOpen }"
+          @click="menuOpen = !menuOpen"
+        >
           …
         </button>
-        <button type="submit" class="send" tabindex="-1">记下</button>
+
+        <AppButton type="submit" class="composer__submit" tabindex="-1">记下</AppButton>
       </div>
     </div>
   </form>
@@ -290,280 +318,204 @@ watch(
 .composer {
   flex: none;
   position: relative;
-  padding: var(--space-3) calc(var(--page-padding) + var(--page-margin)) var(--space-4) 0;
+  padding: var(--space-3) 0 var(--space-4) 0;
+}
 
-  .box {
-    display: flex;
-    flex-direction: column;
-    background: var(--surface);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius);
-    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+.composer__box {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
 
-    &:focus-within {
-      border-color: var(--blue);
-    }
-  }
-
-  textarea {
-    display: block;
-    width: 100%;
-    border: 0;
-    background: none;
-    outline: none;
-    resize: none;
-    font-size: var(--font-size-3);
-    color: var(--text);
-    padding: 2px 0 var(--space-2);
-    margin: 0;
-    // 高度由 JS 按内容撑，这里给个上限，免得一句话糊满半个窗口。
-    max-height: 160px;
-    overflow-y: auto;
-
-    &::placeholder {
-      color: var(--text-faint);
-    }
-  }
-
-  .crow {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  // 目标标签：列全所有目标，点一下选中、再点一下取消，可以多选。
-  // 一行放不下就整排收起来，只留「…」——由 JS 量完宽度决定。
-  .gchips {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    overflow: hidden;
-  }
-
-  .gchip {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex: none;
-    border: 1px solid transparent;
-    border-radius: var(--radius-pill);
-    padding: var(--space-1) var(--space-2);
-    color: var(--text-faint);
-    white-space: nowrap;
-
-    i {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      flex: none;
-      background: transparent;
-      box-shadow: inset 0 0 0 1.5px var(--border-strong);
-    }
-
-    &:hover {
-      border-color: var(--border-strong);
-      color: var(--text-muted);
-    }
-
-    // 选中：实心点 + 目标自己的底色。没选中的一律是空心点。
-    &.on {
-      background: var(--goal-background);
-      border-color: var(--goal-border);
-      color: var(--goal-text);
-      font-weight: bold;
-
-      i {
-        background: var(--goal-color);
-        box-shadow: none;
-      }
-    }
-
-    // 规则里没有手工打卡的目标：标签画成虚线，选得中但不计分。
-    &.noscore.on {
-      border-style: dashed;
-    }
-  }
-
-  .gmore {
-    flex: none;
-    border-radius: var(--radius-pill);
-    padding: var(--space-1) var(--space-2);
-    color: var(--text-faint);
-
-    &:hover {
-      border-color: var(--text-faint);
-      color: var(--text-muted);
-    }
-
-    &.on {
-      border-color: var(--goal-border);
-      background: var(--surface-2);
-      color: var(--text);
-    }
-  }
-
-  // 往上弹，不往下：下面是窗口边缘。
-  .gmenu {
-    position: absolute;
-    left: calc(var(--page-padding) + var(--page-margin));
-    bottom: 100%;
-    margin-bottom: var(--space-2);
-    min-width: 230px;
-    max-width: 420px;
-    background: var(--surface);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius);
-    padding: var(--space-2);
-    z-index: 20;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-
-  .gmenu-h {
-    padding: var(--space-1) var(--space-2);
-    font-size: var(--font-size-2);
-    color: var(--text-faint);
-
-    span {
-      display: block;
-      color: var(--text-faint);
-    }
-  }
-
-  .gopt {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    text-align: left;
-    border: 0;
-    padding: 7px 9px;
-
-    &:hover {
-      background: var(--surface-2);
-    }
-
-    &.on {
-      color: var(--text);
-      font-weight: bold;
-      background: var(--surface-2);
-    }
-
-    i {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      flex: none;
-      background: transparent;
-      box-shadow: inset 0 0 0 1.5px var(--border-strong);
-    }
-
-    &.on i {
-      background: var(--goal-color);
-      box-shadow: none;
-    }
-
-    &.noscore.on i {
-      background: transparent;
-      box-shadow: inset 0 0 0 2px var(--goal-color);
-    }
-
-    .gn {
-      flex: none;
-    }
-
-    em {
-      margin-left: auto;
-      padding-left: 10px;
-      font-style: normal;
-      font-size: var(--font-size-1);
-      color: var(--text-faint);
-      font-weight: normal;
-    }
-  }
-
-  // 规则气泡：在输入区上面、左对齐，和下面那排目标气泡分成两层。
-  // 形状是圆角矩形而不是胶囊：两种气泡长得一样的话，扫一眼分不清哪排是哪排。
-  .rules {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    padding: 0 0 var(--space-2);
-
-    &.broke .rchip {
-      border-color: var(--rose);
-      color: var(--rose-text);
-    }
-  }
-
-  .rules-list {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-
-    > .rgroup:first-child {
-      margin-left: 0;
-    }
-  }
-
-  // 有多个目标时才写目标名，否则它就是噪音。
-  .rgroup {
-    font-size: var(--font-size-1);
-    color: var(--goal-text);
-    font-weight: bold;
-    flex: none;
-    margin-left: 4px;
-  }
-
-  .rchip {
-    padding: var(--space-1) 9px;
-    max-width: 260px;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-
-    &:hover {
-      border-color: var(--text-faint);
-      color: var(--text);
-    }
-
-    &.on {
-      background: var(--goal-background);
-      border-color: var(--goal-border);
-      color: var(--goal-text);
-      font-weight: bold;
-    }
-  }
-
-  .send {
-    flex: none;
-
-    &:hover {
-      border-color: var(--text-faint);
-      color: var(--text);
-    }
-  }
-
-  &.busy {
-    .box,
-    .send {
-      opacity: 0.5;
-    }
-  }
-
-  // 提交失败时把框描红——只把按钮变灰会让人以为「点了没反应」。
-  &.broke {
-    .box {
-      border-color: var(--rose);
-    }
-
-    textarea::placeholder {
-      color: var(--rose-text);
-    }
+  &:focus-within {
+    border-color: var(--blue);
   }
 }
+
+.composer__input {
+  display: block;
+  width: 100%;
+  max-height: 160px;
+  padding: 2px 0 var(--space-2);
+  background: none;
+  border: 0;
+  outline: none;
+  resize: none;
+  font-size: var(--font-size-3);
+  overflow-y: auto;
+
+  &::placeholder {
+    color: var(--text-faint);
+  }
+}
+
+.composer__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+// 目标标签：列全所有目标，点一下选中、再点一下取消，可以多选。
+// 一行放不下就整排收起来，只留「…」——由 JS 量完宽度决定。
+.composer__chips {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+
+  // 标签在 flex 里不许被压扁。
+  :deep(.toggle-chip) {
+    flex: none;
+    gap: var(--space-2);
+  }
+}
+
+.composer__more {
+  flex: none;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  color: var(--text-faint);
+
+  &:hover {
+    border-color: var(--border-strong);
+    color: var(--text-muted);
+  }
+
+  &--open {
+    border-color: var(--goal-border);
+    background: var(--surface-2);
+    color: var(--text);
+  }
+}
+
+// 往上弹，不往下：下面是窗口边缘。
+.composer__menu {
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  z-index: 20;
+  min-width: 230px;
+  max-width: 420px;
+  margin-bottom: var(--space-2);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.composer__menu-title {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-2);
+  color: var(--text-faint);
+
+  span {
+    display: block;
+  }
+}
+
+.composer__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px 9px;
+  text-align: left;
+
+  &:hover {
+    background: var(--surface-2);
+  }
+
+  &--selected {
+    background: var(--surface-2);
+    color: var(--text);
+    font-weight: bold;
+  }
+}
+
+.composer__option-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--border-strong);
+}
+
+.composer__option--selected .composer__option-dot {
+  background: var(--goal-color);
+  box-shadow: none;
+}
+
+.composer__option--noscore.composer__option--selected .composer__option-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--goal-color);
+}
+
+.composer__option-label {
+  flex: none;
+}
+
+.composer__option-note {
+  margin-left: auto;
+  padding-left: 10px;
+  font-style: normal;
+  font-size: var(--font-size-1);
+  color: var(--text-faint);
+  font-weight: normal;
+}
+
+// 规则气泡：圆角矩形而不是胶囊：两种气泡长得一样的话，扫一眼分不清哪排是哪排。
+.composer__rules {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0 0 var(--space-2);
+}
+
+.composer__rule-list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+// 有多个目标时才写目标名，否则它就是噪音。
+.composer__rule-group {
+  margin-left: 4px;
+  font-size: var(--font-size-1);
+  font-weight: bold;
+  color: var(--goal-text);
+}
+
+.composer__rules--invalid :deep(.toggle-chip) {
+  border-color: var(--rose);
+  color: var(--rose-text);
+}
+
+.composer__submit {
+  flex: none;
+}
+
+.composer--busy .composer__box,
+.composer--busy .composer__submit {
+  opacity: 0.5;
+}
+
+// 提交失败时把框描红——只把按钮变灰会让人以为「点了没反应」。
+.composer--invalid .composer__box {
+  border-color: var(--rose);
+}
+
+.composer--invalid .composer__input::placeholder {
+  color: var(--rose-text);
+}
 </style>
+

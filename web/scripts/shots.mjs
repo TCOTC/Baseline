@@ -1,4 +1,4 @@
-// 只截图、不交互：给样式重构做「改前 / 改后」的像素基准。
+// 只截图、不交互：给样式改动做「改前 / 改后」的像素基准。
 // 三屏都必须是确定性的（演示数据的时间都是 00:00，页面不显示当前时间）。
 import { chromium } from 'playwright'
 import { mkdirSync } from 'node:fs'
@@ -14,17 +14,17 @@ const errors = []
 page.on('pageerror', (e) => errors.push(e.message))
 
 await page.goto(BASE, { waitUntil: 'networkidle' })
-await page.waitForSelector('.card')
+await page.waitForSelector('.goal-card')
 await page.waitForTimeout(150)
 await page.screenshot({ path: path.join(OUT, 'main.png') })
 
-await page.locator('.card').first().click()
-await page.waitForSelector('.detail[data-goal]')
+await page.locator('.goal-card').first().click()
+await page.waitForSelector('.page[data-goal]')
 await page.waitForTimeout(150)
 await page.screenshot({ path: path.join(OUT, 'goal.png') })
 
-await page.click('.back')
-await page.waitForSelector('.card')
+await page.click('.back-link')
+await page.waitForSelector('.goal-card')
 await page.click('#gear')
 await page.waitForSelector('#ai-base')
 await page.waitForTimeout(150)
@@ -36,3 +36,4 @@ if (errors.length) {
   process.exit(1)
 }
 console.log('截图完成：' + OUT)
+

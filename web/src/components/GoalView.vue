@@ -2,8 +2,19 @@
 import { computed, ref } from 'vue'
 import { api } from '../api.js'
 import { askConfirm } from '../ui.js'
+import { findKind } from '../kinds.js'
 import CurveView from './CurveView.vue'
 import LogList from './LogList.vue'
+import BackLink from './BackLink.vue'
+import PageShell from './PageShell.vue'
+import AppSection from './AppSection.vue'
+import FormField from './FormField.vue'
+import AppInput from './AppInput.vue'
+import AppTextarea from './AppTextarea.vue'
+import ActionBar from './ActionBar.vue'
+import AppButton from './AppButton.vue'
+import Notice from './Notice.vue'
+import SourceKindPicker from './SourceKindPicker.vue'
 
 const props = defineProps({
   page: { type: Object, required: true },
@@ -28,14 +39,7 @@ const rationale = ref('')
 const err = ref('')
 const retrying = ref(false)
 
-const KINDS = [
-  { k: 'manual_checkin', name: '手工打卡', desc: '我自己记一次' },
-  { k: 'git_commits', name: 'git 提交', desc: '某个仓库的提交数（还没接入）' },
-  { k: 'external_metric', name: '外部数据', desc: '读别处已经记着的数（还没接入）' },
-  { k: 'derived', name: '组合', desc: '上面几条按公式算（还没接入）' },
-]
-
-const needTarget = computed(() => kind.value === 'git_commits' || kind.value === 'external_metric')
+const needTarget = computed(() => findKind(kind.value).needsTarget)
 
 const looseMsg = computed(() => {
   const g = goal.value
@@ -72,18 +76,18 @@ async function saveEdit() {
 }
 
 async function saveArchive() {
-  const r = reason.value.trim()
-  if (!r) {
+  const value = reason.value.trim()
+  if (!value) {
     fail(new Error('归档要写一句原因——那是三个月后唯一能回看的东西'))
     return
   }
   try {
-    await api.archiveGoal(goal.value.id, r)
+    await api.archiveGoal(goal.value.id, value)
   } catch (e) {
     fail(e)
     return
   }
-  // 归档完它就不在列表里了，回主视图，别停在一个已经归档的目标上。
+  // 归档完它就不在列表里了，回主视图。
   emit('nav', '/')
 }
 
@@ -120,9 +124,9 @@ async function deleteRule(rule) {
   }
 }
 
-function pickKind(k) {
-  kind.value = k
-  if (k !== 'git_commits' && k !== 'external_metric') target.value = ''
+function pickKind(value) {
+  kind.value = value
+  if (!findKind(value).needsTarget) target.value = ''
 }
 
 async function addSource() {
@@ -130,13 +134,13 @@ async function addSource() {
     fail(new Error('先选一种来源'))
     return
   }
-  const t = target.value.trim()
-  if (needTarget.value && !t) {
+  const value = target.value.trim()
+  if (needTarget.value && !value) {
     fail(new Error('空着就等于「什么都算」——那条规则会把所有活动都装进来，曲线永远在涨'))
     return
   }
   try {
-    await api.addSource(goal.value.id, kind.value, t, rationale.value)
+    await api.addSource(goal.value.id, kind.value, value, rationale.value)
     addrOpen.value = false
     err.value = ''
     rationale.value = ''
@@ -162,301 +166,304 @@ async function retry() {
 </script>
 
 <template>
-  <div class="detail" :class="goal.color" :data-goal="goal.id">
-    <header class="hero">
-      <div class="hero-top">
-        <div>
-          <a class="back" href="/" @click.prevent="emit('nav', '/')">← 返回主页</a>
-          <div v-if="!editing">
-            <div class="dtitle">{{ goal.title }}</div>
-            <p v-if="goal.why" class="dwhy">{{ goal.why }}</p>
-            <p v-else class="dwhy">还没有写「为什么想做」。</p>
-          </div>
-          <div v-else>
-            <div class="field">
-              <label>名字</label>
-              <input v-model="editTitle" maxlength="40" />
-            </div>
-            <div class="field">
-              <label>为什么想做</label>
-              <textarea v-model="editWhy" rows="3"></textarea>
-            </div>
-            <div class="dacts dacts-flat edit-acts">
-              <button id="esave" type="button" @click="saveEdit">保存</button>
-              <button type="button" @click="editing = false" id="ecancel">取消</button>
-            </div>
+  <PageShell :theme="goal.color" :data-goal="goal.id">
+    <template #hero>
+      <BackLink @nav="emit('nav', '/')" />
+
+      <div class="goal-detail__header">
+        <div class="goal-detail__intro">
+          <template v-if="!editing">
+            <h1 class="goal-detail__title">{{ goal.title }}</h1>
+            <p class="goal-detail__why">
+              {{ goal.why || '还没有写「为什么想做」。' }}
+            </p>
+          </template>
+
+          <div v-else class="goal-detail__edit">
+            <FormField label="名字" for-id="etitle">
+              <AppInput id="etitle" v-model="editTitle" maxlength="40" />
+            </FormField>
+            <FormField label="为什么想做">
+              <AppTextarea v-model="editWhy" :rows="3" />
+            </FormField>
+            <ActionBar class="goal-detail__edit-actions">
+              <AppButton id="esave" variant="primary" @click="saveEdit">保存</AppButton>
+              <AppButton id="ecancel" @click="editing = false">取消</AppButton>
+            </ActionBar>
           </div>
         </div>
-        <div class="dcur">
-          <span :class="goal.zero ? 'dval zero' : 'dval'">{{ goal.currentText }}</span><span class="unit">次</span>
-        </div>
+
+        <p class="goal-detail__current">
+          <strong class="goal-detail__value" :class="{ 'goal-detail__value--zero': goal.zero }">
+            {{ goal.currentText }}
+          </strong>
+          <span class="goal-detail__unit">次</span>
+        </p>
       </div>
-      <div class="dcurve"><CurveView :curve="goal.curve" /></div>
-      <div class="cv-foot">
+
+      <CurveView class="goal-detail__curve" :curve="goal.curve" />
+
+      <div class="goal-detail__curve-caption">
         <span>{{ goal.firstDay }}</span>
         <span>{{ goal.spanDays }} 天 · 阶梯线不做插值</span>
         <span>{{ goal.lastDay }}</span>
       </div>
-    </header>
+    </template>
 
-    <div class="panes">
-      <div class="pane rules">
-        <section class="dsec">
-          <h3>判定规则<span>什么算推进它</span></h3>
-          <div>
-            <div v-for="r in goal.rules" :key="r.id" class="rule">
+    <div class="goal-detail__panes">
+      <div class="goal-detail__pane goal-detail__pane--rules">
+        <AppSection title="判定规则" hint="什么算推进它">
+          <div class="goal-detail__rules">
+            <article v-for="rule in goal.rules" :key="rule.id" class="goal-detail__rule">
               <div>
-                <div class="rkind">{{ r.kindLabel }}{{ r.implemented ? '' : '（未接入）' }}</div>
-                <div v-if="r.target" class="rtarget">{{ r.target }}</div>
-                <div v-if="r.rationale" class="rwhy">{{ r.rationale }}</div>
+                <p class="goal-detail__rule-kind">
+                  {{ rule.kindLabel }}{{ rule.implemented ? '' : '（未接入）' }}
+                </p>
+                <p v-if="rule.target" class="goal-detail__rule-target">{{ rule.target }}</p>
+                <p v-if="rule.rationale" class="goal-detail__rule-why">{{ rule.rationale }}</p>
               </div>
-              <button type="button" class="x" title="删掉这条规则" @click="deleteRule(r)">删除规则</button>
-            </div>
+              <AppButton variant="ghost" class="goal-detail__rule-delete" @click="deleteRule(rule)">
+                删除规则
+              </AppButton>
+            </article>
 
-            <div v-if="!goal.rules.length" class="hint">
+            <Notice v-if="!goal.rules.length" class="goal-detail__hint">
               还没有判定规则。没有它，这个目标给不出「什么算推进它」——曲线永远不会动。
-            </div>
+            </Notice>
 
-            <!-- 挂上来了、但没归到任何规则。别让人自己发现这件事：
-                 一条记录明明在流水里，数字却不动，看起来就是坏的。 -->
-            <div v-if="goal.loose > 0 && goal.manualCount > 0" class="hint warn">
+            <!-- 挂上来了、但没归到任何规则。别让人自己发现：一条记录在流水里，
+                 数字却不动，看起来就是坏的。 -->
+            <Notice v-if="goal.loose > 0 && goal.manualCount > 0" tone="warning" class="goal-detail__hint">
               {{ looseMsg }}
-              <button
+              <AppButton
                 v-if="goal.aiRetry"
-                type="button"
-                class="addrule airetry"
+                variant="dashed"
                 :disabled="retrying"
                 @click="retry"
               >
                 {{ retrying ? '正在判…' : `让 AI 判这 ${goal.loose} 条` }}
-              </button>
-            </div>
+              </AppButton>
+            </Notice>
           </div>
 
-          <button id="addrbtn" type="button" class="addrule" @click="addrOpen = !addrOpen">＋ 加一条规则</button>
+          <AppButton id="addrbtn" variant="dashed" class="goal-detail__add-rule" @click="addrOpen = !addrOpen">
+            ＋ 加一条规则
+          </AppButton>
 
-          <div v-if="addrOpen" id="addrform" class="addr-form">
-            <div id="addrkinds">
-              <button
-                v-for="k in KINDS"
-                :key="k.k"
-                type="button"
-                class="kind"
-                :class="{ on: kind === k.k }"
-                @click="pickKind(k.k)"
-              >
-                <b>{{ k.name }}</b><span>{{ k.desc }}</span>
-              </button>
-            </div>
-            <div v-if="needTarget" id="addrtarget" class="field">
-              <label>具体是哪个？<span id="addrhint">{{ kind === 'git_commits' ? '哪个仓库？' : '读哪份数据？' }}</span></label>
-              <input id="artarget" v-model="target" maxlength="120" />
-            </div>
-            <div class="field">
-              <label>什么算推进它</label>
-              <input id="arrationale" v-model="rationale" maxlength="120" placeholder="比如：读完一章，或做完一章题，算一次" />
-            </div>
-            <div class="dacts dacts-flat">
-              <button id="arsave" type="button" @click="addSource">加上</button>
-              <button id="arcancel" type="button" @click="addrOpen = false">取消</button>
-            </div>
+          <div v-if="addrOpen" id="addrform" class="goal-detail__add-form">
+            <SourceKindPicker id="addrkinds" :model-value="kind" @update:model-value="pickKind" />
+            <FormField v-if="needTarget" label="具体是哪个？" :hint="findKind(kind).targetPrompt">
+              <AppInput id="artarget" v-model="target" maxlength="120" />
+            </FormField>
+            <FormField label="什么算推进它">
+              <AppInput
+                id="arrationale"
+                v-model="rationale"
+                maxlength="120"
+                placeholder="比如：读完一章，或做完一章题，算一次"
+              />
+            </FormField>
+            <ActionBar class="goal-detail__form-actions">
+              <AppButton id="arsave" variant="primary" @click="addSource">加上</AppButton>
+              <AppButton id="arcancel" @click="addrOpen = false">取消</AppButton>
+            </ActionBar>
           </div>
-        </section>
+        </AppSection>
 
-        <div class="dacts">
-          <button id="dedit" type="button" @click="startEdit">修改</button>
-          <button id="darch" type="button" @click="archOpen = true">归档</button>
-          <button id="ddel" type="button" class="danger" :disabled="!goal.canDelete" @click="deleteGoal">删除</button>
-        </div>
-        <div v-if="!goal.canDelete" class="hint">
+        <ActionBar class="goal-detail__meta-actions">
+          <AppButton id="dedit" @click="startEdit">修改</AppButton>
+          <AppButton id="darch" @click="archOpen = true">归档</AppButton>
+          <AppButton id="ddel" variant="danger" :disabled="!goal.canDelete" @click="deleteGoal">
+            删除
+          </AppButton>
+        </ActionBar>
+
+        <Notice v-if="!goal.canDelete" class="goal-detail__hint">
           已经记了 {{ goal.checkinCount }} 条，所以删不掉。动过的历史不该被一次点击抹掉——不要了请走归档，它会保留曲线和放弃的理由。
-        </div>
-        <div v-else class="hint">还没有任何记录，所以可以直接删掉。删了就没了，归档则会留下痕迹。</div>
+        </Notice>
+        <Notice v-else class="goal-detail__hint">
+          还没有任何记录，所以可以直接删掉。删了就没了，归档则会留下痕迹。
+        </Notice>
 
-        <div v-if="err" id="derr" class="warnline">{{ err }}</div>
+        <Notice v-if="err" id="derr" tone="danger" class="goal-detail__hint">{{ err }}</Notice>
 
-        <div v-if="archOpen" class="arch-form">
-          <div class="field">
-            <label>为什么放弃它？</label>
-            <textarea id="areason" v-model="reason" rows="2" placeholder="这句话三个月后你会想再看一眼"></textarea>
-          </div>
-          <div class="dacts dacts-flat">
-            <button id="asave" type="button" @click="saveArchive">归档</button>
-            <button id="acancel" type="button" @click="archOpen = false">取消</button>
-          </div>
+        <div v-if="archOpen" class="goal-detail__archive-form">
+          <FormField label="为什么放弃它？">
+            <AppTextarea
+              id="areason"
+              v-model="reason"
+              :rows="2"
+              placeholder="这句话三个月后你会想再看一眼"
+            />
+          </FormField>
+          <ActionBar class="goal-detail__form-actions">
+            <AppButton id="asave" variant="primary" @click="saveArchive">归档</AppButton>
+            <AppButton id="acancel" @click="archOpen = false">取消</AppButton>
+          </ActionBar>
         </div>
       </div>
 
-      <div class="pane recs">
-        <section class="dsec">
-          <h3>记录<span>{{ goal.checkinCount }} 条</span></h3>
-          <LogList variant="dlog" :rows="goal.timeline" :ai-state="aiState" :show-empty="false" />
-          <div v-if="!goal.timeline.length" class="hint">
+      <div class="goal-detail__pane goal-detail__pane--records">
+        <AppSection title="记录" :hint="`${goal.checkinCount} 条`">
+          <LogList variant="detail" :rows="goal.timeline" :ai-state="aiState" :show-empty="false" />
+          <Notice v-if="!goal.timeline.length" class="goal-detail__hint">
             这个目标还没有任何记录。回主页，在底部输入框里记一条。
-          </div>
-        </section>
+          </Notice>
+        </AppSection>
       </div>
     </div>
-  </div>
+  </PageShell>
 </template>
 
 <style scoped lang="scss">
-// 右边那个当前值对齐左栏的底边（why 那一行的底部），不是顶部——
-// 顶对齐时它悬在标题旁边，看着像浮在半空。
-.dcur {
+// 当前值对齐 why 那一行的底边，不是顶部——顶对齐时它悬在标题旁边。
+.goal-detail__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.goal-detail__intro {
+  min-width: 0;
+}
+
+.goal-detail__title {
+  font-size: var(--font-size-7);
+  font-weight: bold;
+}
+
+.goal-detail__why {
+  margin-top: var(--space-2);
+  font-size: var(--font-size-2);
+  color: var(--text-muted);
+}
+
+.goal-detail__edit {
+  max-width: 460px;
+}
+
+.goal-detail__edit-actions {
+  margin-top: var(--space-3);
+}
+
+.goal-detail__current {
   flex: none;
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-2);
+  color: var(--goal-color);
 }
 
-.dval {
+.goal-detail__value {
   font-size: var(--font-size-8);
   font-weight: bold;
-  color: var(--goal-color);
-  font-variant-numeric: tabular-nums;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 
-  &.zero {
+  &--zero {
     color: var(--text-faint);
     font-weight: normal;
   }
 }
 
-.unit {
-  font-size: var(--font-size-3);
+.goal-detail__unit {
+  font-size: var(--font-size-2);
   color: var(--text-faint);
 }
 
-.dcurve {
-  margin-top: 16px;
-
-  svg {
-    width: 100%;
-    height: 116px;
-    display: block;
-  }
+.goal-detail__curve {
+  height: 116px;
+  margin-top: var(--space-4);
 }
 
-.cv-foot {
+.goal-detail__curve-caption {
   display: flex;
   justify-content: space-between;
-  margin-top: 6px;
-  font-size: var(--font-size-1);
+  margin-top: var(--space-1);
+  font-size: var(--font-size-2);
   color: var(--text-faint);
-  font-family: var(--font-mono);
 }
 
-// ---- 下面两栏：规则 | 记录 ----
-.panes {
+.goal-detail__panes {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(300px, 380px) 1fr;
+  grid-template-columns: 1fr 1.4fr;
 }
 
-.pane {
+.goal-detail__pane {
   min-height: 0;
-  min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable;
-  padding: var(--space-5) 0 var(--space-6);
-
-  // 左栏的内容从 --page-padding 起（和上面的 hero 同一条竖线），右栏从分隔线往里让。
-  &.rules {
-    border-right: 1px solid var(--border);
-    padding-left: var(--page-padding);
-    padding-right: var(--space-5);
-    // 左栏比右栏短很多时，别让「修改/归档/删除」掉到视野外。
-    padding-bottom: var(--space-6);
-  }
-
-  &.recs {
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    padding-left: calc(var(--page-padding) + var(--space-1));
-
-    // 中间还隔着一层 .dsec——不给它 flex:1，下面的 .dlog 就撑不开也压不住。
-    .dsec {
-      flex: 1;
-      min-height: 0;
-      display: flex;
-      flex-direction: column;
-
-      h3 {
-        flex: none;
-        padding-right: var(--page-padding);
-      }
-    }
-
-    .hint {
-      flex: none;
-      padding-right: var(--page-padding);
-    }
-  }
+  padding: var(--space-4) var(--space-5) var(--space-4) var(--page-padding);
 }
 
-.rule {
+.goal-detail__pane--rules {
+  border-right: 1px solid var(--border);
+}
+
+.goal-detail__pane--records {
+  padding-right: 0;
+  padding-left: var(--space-5);
+}
+
+.goal-detail__rules {
+  margin-bottom: var(--space-3);
+}
+
+.goal-detail__rule {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
   padding: var(--space-3) 0;
   border-bottom: 1px solid var(--border);
-
-  &:last-of-type {
-    border-bottom: 0;
-  }
-
-  .rkind {
-    font-size: var(--font-size-3);
-    font-weight: bold;
-    color: var(--text);
-  }
-
-  .rtarget {
-    font-size: var(--font-size-2);
-    color: var(--text-faint);
-    margin-top: 1px;
-  }
-
-  .rwhy {
-    font-size: var(--font-size-3);
-    color: var(--text-muted);
-    margin-top: 3px;
-  }
-
-  .x {
-    flex: none;
-    border: 0;
-    padding: 2px 4px;
-    font-size: var(--font-size-2);
-    color: var(--text-faint);
-
-    &:hover {
-      color: var(--text);
-    }
-  }
 }
 
-// 表单里的动作行不带 .dacts 那条上边框；间距按上下文略有不同。
-.dacts-flat {
-  border: 0;
-  padding: 0;
-  margin-top: 10px;
+.goal-detail__rule-kind {
+  font-size: var(--font-size-3);
+  font-weight: bold;
 }
 
-.edit-acts {
-  margin-top: 14px;
+.goal-detail__rule-target,
+.goal-detail__rule-why {
+  margin-top: 2px;
+  font-size: var(--font-size-2);
+  color: var(--text-muted);
 }
 
-.addr-form {
-  margin-top: 12px;
+.goal-detail__rule-why {
+  color: var(--text-faint);
 }
 
-.arch-form {
-  margin-top: 16px;
+.goal-detail__rule-delete {
+  flex: none;
+  font-size: var(--font-size-2);
+}
+
+.goal-detail__add-rule {
+  margin-top: var(--space-2);
+}
+
+.goal-detail__add-form {
+  margin-top: var(--space-3);
+}
+
+.goal-detail__form-actions {
+  margin-top: var(--space-3);
+}
+
+.goal-detail__meta-actions {
+  margin-top: var(--space-5);
+}
+
+.goal-detail__hint {
+  margin-top: var(--space-2);
+}
+
+.goal-detail__archive-form {
+  margin-top: var(--space-3);
 }
 </style>

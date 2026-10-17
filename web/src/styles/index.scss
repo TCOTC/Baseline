@@ -1,8 +1,4 @@
-// 全局层：令牌、基础、跨屏原语、流水。
-//
-// 组件自己的样式在各自的 <style scoped lang="scss"> 里；这里只放
-// 「必须全局」的东西——调色板（继承）、流水行（innerHTML）、跨屏共用件。
+// 全局样式入口：令牌 + 重置。
 @use 'tokens';
 @use 'base';
-@use 'shared';
-@use 'log';
+

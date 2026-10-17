@@ -1,6 +1,14 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { api } from '../api.js'
+import BackLink from './BackLink.vue'
+import PageShell from './PageShell.vue'
+import AppSection from './AppSection.vue'
+import FormField from './FormField.vue'
+import AppInput from './AppInput.vue'
+import ActionBar from './ActionBar.vue'
+import AppButton from './AppButton.vue'
+import Notice from './Notice.vue'
 
 const props = defineProps({ page: { type: Object, required: true } })
 const emit = defineEmits(['reload', 'nav'])
@@ -9,7 +17,7 @@ const s = computed(() => props.page.settings)
 const base = ref('')
 const model = ref('')
 const key = ref('')
-const th = ref(80)
+const threshold = ref(80)
 const msg = ref('')
 const bad = ref(false)
 const armed = ref(false)
@@ -17,11 +25,11 @@ const busy = ref(false)
 
 watch(
   s,
-  (v) => {
-    if (!v) return
-    base.value = v.baseUrl
-    model.value = v.model
-    th.value = v.threshold
+  (value) => {
+    if (!value) return
+    base.value = value.baseUrl
+    model.value = value.model
+    threshold.value = value.threshold
     key.value = ''
     armed.value = false
   },
@@ -34,8 +42,8 @@ function show(text, isBad) {
 }
 
 function keyValue() {
-  const v = key.value.trim()
-  return v === '' ? null : v
+  const value = key.value.trim()
+  return value === '' ? null : value
 }
 
 async function save(enabled, apiKey) {
@@ -43,7 +51,7 @@ async function save(enabled, apiKey) {
     enabled,
     baseUrl: base.value,
     model: model.value,
-    threshold: Number(th.value),
+    threshold: Number(threshold.value),
     apiKey,
   })
 }
@@ -70,8 +78,8 @@ async function onTest() {
     // 「测一下」要先把当前填的存下来再测，否则测的是上一次的配置，
     // 而人以为测的是屏幕上这些字。
     await save(true, keyValue())
-    const r = await api.testAI()
-    show(r.message)
+    const result = await api.testAI()
+    show(result.message)
   } catch (e) {
     show('没通：' + e.message, true)
   } finally {
@@ -115,135 +123,158 @@ async function onClear() {
 </script>
 
 <template>
-  <div class="detail">
-    <header class="hero">
-      <div class="hero-top">
-        <div>
-          <a class="back" href="/" @click.prevent="emit('nav', '/')">← 返回主页</a>
-          <div class="dtitle">设置</div>
-        </div>
-      </div>
-    </header>
+  <PageShell>
+    <template #hero>
+      <BackLink @nav="emit('nav', '/')" />
+      <h1 class="settings-view__title">设置</h1>
+    </template>
 
-    <div class="settings">
-      <section class="dsec">
-        <h3>AI 判定<span>{{ s.state }}</span></h3>
-        <p class="dwhy">{{ s.blurb }}</p>
-        <div v-if="s.keyBroken" class="hint bad">密钥读不出来了，重新填一次就好。</div>
+    <div class="settings-view">
+      <AppSection class="settings-view__section" title="AI 判定" :hint="s.state">
+        <p class="settings-view__intro">{{ s.blurb }}</p>
 
-        <div class="field">
-          <label for="ai-base">接口地址</label>
-          <input
+        <Notice v-if="s.keyBroken" tone="danger" class="settings-view__notice">
+          密钥读不出来了，重新填一次就好。
+        </Notice>
+
+        <FormField label="接口地址" for-id="ai-base" hint="OpenAI 兼容的地址。DeepSeek、OpenAI、Moonshot、本机跑的模型都行。">
+          <AppInput
             id="ai-base"
             v-model="base"
             type="text"
             :placeholder="s.defaultBaseUrl"
             spellcheck="false"
           />
-          <div class="hint">OpenAI 兼容的地址。DeepSeek、OpenAI、Moonshot、本机跑的模型都行。</div>
-        </div>
+        </FormField>
 
-        <div class="field">
-          <label for="ai-model">模型</label>
-          <input id="ai-model" v-model="model" type="text" :placeholder="s.defaultModel" spellcheck="false" />
-        </div>
+        <FormField label="模型" for-id="ai-model">
+          <AppInput
+            id="ai-model"
+            v-model="model"
+            type="text"
+            :placeholder="s.defaultModel"
+            spellcheck="false"
+          />
+        </FormField>
 
-        <div class="field">
-          <label for="ai-key">API 密钥</label>
-          <div class="frow">
-            <input
+        <FormField
+          label="API 密钥"
+          for-id="ai-key"
+          hint="只存在这台电脑上，不会发到别处。留空就是不改动现在这把。"
+        >
+          <div class="settings-view__key-row">
+            <AppInput
               id="ai-key"
               v-model="key"
               type="password"
-              value=""
               :placeholder="s.keyPlaceholder"
               autocomplete="off"
               spellcheck="false"
             />
-            <button id="ai-key-clear" type="button" :class="{ armed }" :disabled="s.clearDisabled || busy" @click="onClear">
+            <AppButton
+              id="ai-key-clear"
+              :variant="armed ? 'danger' : 'default'"
+              :disabled="s.clearDisabled || busy"
+              @click="onClear"
+            >
               {{ armed ? '再点一次' : '清掉' }}
-            </button>
+            </AppButton>
           </div>
-          <div class="hint">只存在这台电脑上，不会发到别处。留空就是不改动现在这把。</div>
-        </div>
+        </FormField>
 
-        <div class="field">
-          <label for="ai-th">多大把握才自动选 <b id="ai-th-v">{{ th }}</b></label>
-          <input id="ai-th" v-model.number="th" type="range" min="0" max="100" step="5" />
-          <div class="hint">没到这个把握就不替你决定，改成问你。定得越高，自动决定的越少。</div>
-        </div>
+        <FormField label="多大把握才自动选" for-id="ai-th">
+          <p class="settings-view__threshold">当前把握门槛 <b id="ai-th-v">{{ threshold }}</b></p>
+          <input
+            id="ai-th"
+            v-model.number="threshold"
+            class="settings-view__range"
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+          />
+          <p class="settings-view__range-hint">
+            没到这个把握就不替你决定，改成问你。定得越高，自动决定的越少。
+          </p>
+        </FormField>
 
-        <div class="dacts">
-          <button id="ai-save" type="button" :disabled="busy" @click="onSave">保存</button>
-          <button id="ai-test" type="button" :disabled="busy" @click="onTest">测一下</button>
-          <button id="ai-toggle" type="button" :disabled="busy" @click="onToggle">{{ s.toggle }}</button>
-        </div>
-        <div class="hint" :class="{ bad }" id="ai-msg">{{ msg }}</div>
-      </section>
+        <ActionBar class="settings-view__actions">
+          <AppButton id="ai-save" :disabled="busy" @click="onSave">保存</AppButton>
+          <AppButton id="ai-test" :disabled="busy" @click="onTest">测一下</AppButton>
+          <AppButton id="ai-toggle" :disabled="busy" @click="onToggle">{{ s.toggle }}</AppButton>
+        </ActionBar>
+
+        <Notice id="ai-msg" :tone="bad ? 'danger' : 'muted'" class="settings-view__notice">
+          {{ msg }}
+        </Notice>
+      </AppSection>
     </div>
-  </div>
+  </PageShell>
 </template>
 
 <style scoped lang="scss">
-// 设置页：单栏、自己滚。**不复用 .panes 那个两栏网格**——设置只有一栏，
+.settings-view__title {
+  font-size: var(--font-size-7);
+  font-weight: bold;
+}
+
+// 设置页：单栏、自己滚。不复用详情页的两栏网格——只有一栏，
 // 套上去会在右边留一大片空白，看起来像内容没加载出来。
-.settings {
+.settings-view {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: var(--space-5) var(--page-padding) var(--space-6);
   scrollbar-gutter: stable;
-
-  .dsec {
-    max-width: 620px;
-    margin-bottom: var(--space-6);
-
-    &:last-child {
-      margin-bottom: 0;
-    }
-  }
-
-  .dacts {
-    margin-top: 20px;
-  }
-
-  // 滑块：用目标色，和页面上其他可操作的东西一个调子。
-  input[type="range"] {
-    width: 100%;
-    accent-color: var(--blue);
-    height: 22px;
-    padding: 0;
-  }
 }
 
-.frow {
+.settings-view__section {
+  max-width: 620px;
+}
+
+.settings-view__intro {
+  margin-bottom: var(--space-3);
+  font-size: var(--font-size-2);
+  color: var(--text-muted);
+}
+
+.settings-view__notice {
+  margin-top: var(--space-2);
+}
+
+.settings-view__key-row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
 
-  button {
-    flex: none;
-    color: var(--text-faint);
+.settings-view__key-row .app-button {
+  flex: none;
+  white-space: nowrap;
+}
 
-    &:hover {
-      border-color: var(--rose);
-      color: var(--rose-text);
-    }
+// 滑块：用目标色，和页面上其他可操作的东西一个调子。
+.settings-view__range {
+  width: 100%;
+  height: 22px;
+  accent-color: var(--blue);
+}
 
-    &[disabled] {
-      opacity: 0.4;
+.settings-view__threshold {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: var(--font-size-2);
+  color: var(--text-muted);
+}
 
-      &:hover {
-        border-color: var(--border-strong);
-        color: var(--text-faint);
-      }
-    }
+.settings-view__range-hint {
+  margin-top: var(--space-1);
+  font-size: var(--font-size-2);
+  color: var(--text-faint);
+}
 
-    &.armed {
-      border-color: var(--rose);
-      color: var(--rose-text);
-    }
-  }
+.settings-view__actions {
+  margin-top: var(--space-4);
 }
 </style>

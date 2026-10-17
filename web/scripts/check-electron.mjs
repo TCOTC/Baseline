@@ -29,11 +29,11 @@ const app = await electron.launch({
 
 try {
   const win = await app.firstWindow({ timeout: 20000 })
-  await win.waitForSelector('.card', { timeout: 20000 })
-  ok('窗口起来了，页面有卡片', (await win.locator('.card').count()) === 3)
+  await win.waitForSelector('.goal-card', { timeout: 20000 })
+  ok('窗口起来了，页面有卡片', (await win.locator('.goal-card').count()) === 3)
   ok('preload 桥在', await win.evaluate(() => !!(window.bl && window.bl.shell === 'electron')))
-  ok('自绘顶栏在', (await win.locator('.bar').count()) === 1)
-  ok('三个窗口按钮', (await win.locator('.bar .wbtn').count()) === 3)
+  ok('自绘顶栏在', (await win.locator('.title-bar').count()) === 1)
+  ok('三个窗口按钮', (await win.locator('.title-bar__button').count()) === 3)
   // Windows 的标题栏按钮是方角；全局 button 底座不能把圆角漏过来。
   const capRadius = await win.locator('#w-close').evaluate((el) => getComputedStyle(el).borderRadius)
   ok('窗口按钮是方角', capRadius === '0px', capRadius)
@@ -43,9 +43,9 @@ try {
 
   await win.screenshot({ path: path.join(OUT, 'electron.png') })
 
-  await win.locator('.card').first().click()
-  await win.waitForSelector('.detail[data-goal]')
-  ok('点卡片能进详情页', (await win.locator('.dtitle').innerText()).includes('计算机基础'))
+  await win.locator('.goal-card').first().click()
+  await win.waitForSelector('.page[data-goal]')
+  ok('点卡片能进详情页', (await win.locator('.goal-detail__title').innerText()).includes('计算机基础'))
 
   // 关窗 → 隐藏，不是退出。托盘是「随手记一条」的入口，关一次就退出它就没意义了。
   await win.locator('#w-close').click()

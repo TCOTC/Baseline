@@ -2,9 +2,8 @@
 //
 // # 为什么 schema 是终态
 //
-// Rust 那一版背着三条历史迁移（checkins.goal_id 拆表、去 NOT NULL、归属挪到
-// checkin_goals）。这里不需要：没有外部用户，旧库一次性导入即可。所以直接建终态，
-// 省掉 pragma_table_info 那一套「加过没加过」的判定。
+// 没有多版本 schema 需要兼容，所以直接建终态，省掉 pragma_table_info 那一套
+// 「加过没加过」的判定。
 //
 // # 判定不在这一层
 //
@@ -771,8 +770,8 @@ func (s *Store) UnattributedOf(goalID int64) ([]CheckinRef, error) {
 
 // UnlinkedCheckins 是压根没挂到任何目标上的记录：(记录 id, 备注)。
 //
-// 「记下来是第一步，归到哪个目标是第二步」——第二步以前只能人工做，
-// 于是默认一个目标都不选的那条记录就永远躺在流水里，谁也不动它。
+// 「记下来是第一步，归到哪个目标是第二步」——默认不选目标的记录会一直躺在流水里，
+// 需要一条查询把它们捞出来，交给人工或 AI 补判。
 func (s *Store) UnlinkedCheckins() ([]CheckinRef, error) {
 	rows, err := s.db.Query(
 		`SELECT c.id, c.note FROM checkins c

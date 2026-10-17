@@ -6,6 +6,7 @@ import MainView from './components/MainView.vue'
 import GoalView from './components/GoalView.vue'
 import SettingsView from './components/SettingsView.vue'
 import ConfirmModal from './components/ConfirmModal.vue'
+import AppButton from './components/AppButton.vue'
 
 const page = ref(null)
 const failMsg = ref('')
@@ -13,12 +14,12 @@ const aiState = reactive({})
 const shell = !!(window.bl && window.bl.shell)
 
 // 路由还是查询串：?goal=N 是详情页，?settings=1 是设置页。
-// 和旧版一样，刷新、直接粘链接进来都落在同一屏。
+// 刷新、直接粘链接进来都落在同一屏。
 function parseRoute() {
   const q = new URLSearchParams(location.search)
   if (q.get('settings') === '1') return { settings: true }
-  const g = Number(q.get('goal'))
-  return g > 0 ? { goal: g } : {}
+  const goal = Number(q.get('goal'))
+  return goal > 0 ? { goal } : {}
 }
 const route = ref(parseRoute())
 
@@ -45,9 +46,7 @@ function onPop() {
 }
 
 // 记下一条之后：先整体重取（这一刻就看得见），再让 AI 补判。
-//
-// **顺序不许反过来**：先落库、再判。补判的这几秒里人可能已经在写下一条，
-// 所以补判的状态只写在那一条记录上，输入框一概不碰。
+// 顺序不许反过来：先落库、再判。
 async function onCreated(res) {
   await load()
   if (!res || !res.needsAi) return
@@ -77,7 +76,7 @@ onBeforeUnmount(() => window.removeEventListener('popstate', onPop))
 
 <template>
   <TitleBar v-if="shell" />
-  <div class="wrap">
+  <div class="app__body">
     <template v-if="page">
       <MainView
         v-if="page.view === 'main'"
@@ -96,10 +95,11 @@ onBeforeUnmount(() => window.removeEventListener('popstate', onPop))
       />
       <SettingsView v-else :page="page" @nav="nav" @reload="load" />
     </template>
-    <div v-else class="boot">
-      <div v-if="failMsg" class="bad">
+
+    <div v-else class="app__boot">
+      <div v-if="failMsg" class="app__boot-error">
         读取失败：{{ failMsg }}<br />
-        <button type="button" @click="load">重试</button>
+        <AppButton class="app__retry" @click="load">重试</AppButton>
       </div>
       <div v-else>正在读取…</div>
     </div>
@@ -108,28 +108,29 @@ onBeforeUnmount(() => window.removeEventListener('popstate', onPop))
 </template>
 
 <style scoped lang="scss">
+.app__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 // 读取失败时别给一片白：白屏和「今天什么都没发生」长得一模一样。
-.boot {
+.app__boot {
   flex: 1;
   display: grid;
   place-items: center;
+  padding: var(--space-6);
   color: var(--text-muted);
   font-size: var(--font-size-3);
-  padding: 40px;
   text-align: center;
+}
 
-  .bad {
-    color: var(--rose-text);
-  }
+.app__boot-error {
+  color: var(--rose-text);
+}
 
-  button {
-    margin-top: 14px;
-    padding: 7px 14px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius);
-    background: var(--surface);
-    color: var(--text);
-    cursor: pointer;
-  }
+.app__retry {
+  margin-top: var(--space-4);
 }
 </style>

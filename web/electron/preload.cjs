@@ -1,7 +1,7 @@
 // 渲染进程能拿到的全部能力：三个窗口按钮 + 一个「是不是最大化了」。
 //
 // 页面自己走 HTTP 拿数据，所以这里没有 invoke 转发、没有业务 API——
-// 那正是这套结构比旧版少一层的地方。
+// 桥只做窗口控制。
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('bl', {

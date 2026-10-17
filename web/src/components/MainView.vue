@@ -5,6 +5,8 @@ import GoalCard from './GoalCard.vue'
 import LogList from './LogList.vue'
 import Composer from './Composer.vue'
 import AddGoalDialog from './AddGoalDialog.vue'
+import Notice from './Notice.vue'
+import AppButton from './AppButton.vue'
 
 const props = defineProps({
   page: { type: Object, required: true },
@@ -34,8 +36,7 @@ function openDialog() {
   dialog.value = true
 }
 
-// 关掉对话框（新建成功、取消、点「好」）之后把光标放回输入框：
-// 那是打开对话框之前它待的地方，回来时不该要再点一下。
+// 关掉对话框之后把光标放回输入框：那是打开之前它待的地方。
 async function focusComposer() {
   await nextTick()
   const el = document.getElementById('composer-input')
@@ -54,50 +55,66 @@ function onCreated() {
 </script>
 
 <template>
-  <div class="cols">
-    <div class="left">
-      <div class="goals">
-        <div v-if="!page.goals.length" class="nogoal">
+  <main class="main-view">
+    <section class="main-view__goals-column" aria-label="目标">
+      <div class="main-view__goals">
+        <p v-if="!page.goals.length" class="main-view__empty">
           还没有目标。<br />点左下角的「新建目标」——建的时候要一并写清「什么算推进它」，不然那条曲线永远不会动。
-        </div>
+        </p>
 
-        <!-- 待办排在卡片前面：它要看得见才有用。卡片是常驻内容，待办清掉就没了。 -->
-        <div v-if="unlinked" id="unlinked-warn" class="warn">
+        <!-- 待办排在卡片前面：它要看得见才有用。 -->
+        <Notice v-if="unlinked" id="unlinked-warn" tone="warning">
           有 <b>{{ unlinked.count }}</b> 条记录没关联目标，所以没进任何曲线。<br />
-          <button
+          <AppButton
             v-if="unlinked.aiRetry"
-            type="button"
-            class="addrule airetry"
+            variant="dashed"
             :disabled="retrying"
             @click="retry"
           >
             {{ retrying ? '正在判…' : `让 AI 判这 ${unlinked.count} 条` }}
-          </button>
+          </AppButton>
           <template v-else>记一条的时候在下面点一下目标；或者在设置里打开 AI 判定，让它替你归。</template>
-        </div>
+        </Notice>
 
-        <GoalCard v-for="card in page.goals" :key="card.id" :card="card" @nav="(u) => emit('nav', u)" />
+        <GoalCard
+          v-for="card in page.goals"
+          :key="card.id"
+          :card="card"
+          @nav="(url) => emit('nav', url)"
+        />
 
-        <div v-if="noRule" class="warn">
+        <Notice v-if="noRule" tone="warning">
           这些目标<b>没有判定规则</b>，曲线永远不会动：<b>{{ noRule.titles.join('、') }}</b><br />
           点开它们，在「判定规则」里补上。
-        </div>
+        </Notice>
       </div>
 
-      <div class="lfoot">
-        <button id="gear" type="button" class="gear" title="设置（AI 判定）" aria-label="设置" @click="emit('nav', '?settings=1')">
+      <div class="main-view__footer">
+        <button
+          id="gear"
+          type="button"
+          class="main-view__settings"
+          title="设置（AI 判定）"
+          aria-label="设置"
+          @click="emit('nav', '?settings=1')"
+        >
           &#xE713;
         </button>
-        <button id="addgoal" type="button" class="addgoal" @click="openDialog">
+        <AppButton id="addgoal" variant="dashed" class="main-view__add-goal" @click="openDialog">
           <svg viewBox="0 0 12 12" aria-hidden="true">
-            <path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            <path
+              d="M6 1v10M1 6h10"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
           </svg>
           <span>新建目标</span>
-        </button>
+        </AppButton>
       </div>
-    </div>
+    </section>
 
-    <div class="right">
+    <section class="main-view__log-column" aria-label="记录">
       <LogList v-show="!dialog" :rows="page.timeline" :ai-state="aiState" :visible="!dialog" />
       <Composer
         v-show="!dialog"
@@ -106,82 +123,60 @@ function onCreated() {
         @created="(res) => emit('created', res)"
       />
       <AddGoalDialog v-if="dialog" @close="closeDialog" @created="onCreated" />
-    </div>
-  </div>
+    </section>
+  </main>
 </template>
 
 <style scoped lang="scss">
-// 网格一直伸到窗口右边缘，右侧滚动条才贴得住窗口边；
-// 内容的 1120px 由左内边距和右栏滚动容器的内边距对齐。
-.cols {
+// 只有两栏：左边是目标（窄、固定），右边是流水（宽、可滚）。
+.main-view {
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: 308px 1fr;
-  gap: calc(var(--page-padding) + var(--space-1));
-  padding: 10px 0 0 calc(var(--page-padding) + var(--page-margin));
+  gap: 34px;
+  padding: 10px calc(var(--page-padding) + var(--page-margin)) 0;
 }
 
-// 左栏：卡片自己滚，「新建目标」钉在底部左下角。钉住而不是跟着滚——
-// 它是这一栏的入口，不该被三张卡挤出视野。
-.left {
+.main-view__goals-column {
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
-.goals {
+.main-view__goals {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-4);
   overflow-y: auto;
   overflow-x: hidden;
-  padding-bottom: 12px;
+  scrollbar-gutter: stable;
+  padding-bottom: var(--space-4);
 }
 
-// 底边距和输入框的 18px 对齐：左栏的加号和右栏那个框的底边应当落在同一条线上。
-.lfoot {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: var(--space-1) 0 var(--space-4);
-}
-
-.addgoal {
-  flex: none;
-  align-self: flex-start;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
-  border-style: dashed;
+.main-view__empty {
   color: var(--text-faint);
-
-  svg {
-    display: block;
-    width: 11px;
-    height: 11px;
-  }
-
-  &:hover {
-    border-color: var(--text-faint);
-    color: var(--text-muted);
-  }
+  font-size: var(--font-size-3);
 }
 
-// 齿轮：和「新建目标」同一排、在它左边。用 Segoe Fluent Icons 的字符而不是画 SVG，
-// 和顶栏那三个按钮同一个理由（形状与 DPI 缩放交给 Windows）。
-.gear {
+.main-view__footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-bottom: var(--space-4);
+}
+
+.main-view__settings {
   flex: none;
   width: 32px;
   height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
   color: var(--text-faint);
   font-family: var(--font-icon);
   font-size: var(--font-size-5);
@@ -193,21 +188,21 @@ function onCreated() {
   }
 }
 
-// 右栏一直伸到窗口右边缘。**内边距一律加在真正滚动/装内容的元素上**，
-// 不要加在 .right 上——加在父级会把 .log 整体往左推，滚动条跟着进来一百多像素。
-.right {
+.main-view__add-goal {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+
+  svg {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+.main-view__log-column {
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
-
-// 左栏空了的时候不留一片白：告诉他一件事该怎么做，而且就在手边。
-.nogoal {
-  padding: 0 0 var(--space-2);
-  color: var(--text-faint);
-  font-size: var(--font-size-3);
-}
-
-// 待办提醒：排在卡片前面，清掉就没了。
-// 样式在 styles/_shared.scss 里（和详情页、表单的提醒共用一套）。
 </style>

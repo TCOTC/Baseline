@@ -2,7 +2,7 @@
 
 在这个仓库里干活的约定。产品定位与设计取舍见 `README.md`，这里只写「怎么改、怎么验证、怎么提交」。
 
-## 技术栈（2026-10-18 迁移后）
+## 技术栈
 
 - **内核与 HTTP 服务**：Go 1.24+，SQLite 用 `modernc.org/sqlite`（纯 Go，无 cgo）。
 - **界面**：Vue 3 + Vite + SCSS（`web/`），开发时 HMR；样式分全局层与组件 scoped 两层。
@@ -46,7 +46,7 @@ node web/scripts/check-electron.mjs                        # 只跑 Electron 外
 | 改样式要证明「视觉没动」 | `node web/scripts/shots.mjs <目录>` 改前/改后各一次，比 SHA256 | 两次截图 |
 | 窗口按钮、托盘、关窗不退出 | `check-electron.mjs` | 几秒，会开一个窗口 |
 
-两条踩过的坑：
+两条容易犯的错：
 
 - **页面里的数字一律来自服务端**。前端不算 delta、不算累计，连「+3 / 持平 / 还没有记录」
   都是 Go 算好的。改前端时别顺手在 `computed` 里补一次算术——两边各算各的，
@@ -56,7 +56,7 @@ node web/scripts/check-electron.mjs                        # 只跑 Electron 外
 
 ## 调试：浏览器、`/__state`、Playwright
 
-旧版（Tauri）那个「在页面里执行任意 JS」的调试桥**已经删了**，因为不再需要：
+页面里没有执行任意 JS 的调试桥：
 
 - 开发时浏览器直接开 `http://127.0.0.1:7717`，DevTools 原生可用；
 - AI / 自动化用 Playwright 的 `page.evaluate`，能力等价，而且不用在服务里常开一个口子；
@@ -84,10 +84,12 @@ Invoke-RestMethod http://127.0.0.1:7717/__state | ConvertTo-Json -Depth 4
   包括「压根没挂目标」那种。
 - **数字和曲线同源**：`current` 和 `deltaWeek` 都取自快照序列，前端只负责显示。
 - **快照写了不再改写**（`INSERT OR IGNORE`），只有今天例外、每次重算。
-- **界面由 Vue 渲染，样式分两层。** `web/src/styles/` 只放必须全局的东西：调色板
-  （`.blue` 加在容器上、后代读 `var(--goal-color)`，scoped 会拆断这条链）、流水行
-  （由 innerHTML 拼，scoped 匹配不到）、跨屏原语（`.detail`/`.hero`/`.dsec` 等）。
-  组件自己的样式写在 `<style scoped lang="scss">`，避免复制共享规则。
+- **界面由 Vue 渲染，样式分两层。** `web/src/styles/` 只放必须全局的东西：
+  令牌（`_tokens.scss`）、重置（`_base.scss`）、调色板（`[data-theme]` 只能靠继承）。
+  其余全部写在组件的 `<style scoped lang="scss">` 里；跨屏复用做成组件
+  （`AppButton` / `FormField` / `AppSection` / `Notice` / `PageShell` / `ToggleChip`），
+  不用全局类名共享。流水是 Vue 虚拟列表（`LogList` + `LogDayRow` +
+  `LogEntryRow`），只渲染可见的几十行，行样式也在组件里。
   零硬编码颜色，一律走 CSS 变量；字号 / 圆角 / 间距走 `--font-size-*` / `--radius-*` / `--space-*`，
   **不要再写 12.5px、9px 这种一次性取值**；数字 `tabular-nums`。
   **`font-weight` 只有 `bold` / `normal` 两档，不写数字字重**——字重的细微差别看不出来，

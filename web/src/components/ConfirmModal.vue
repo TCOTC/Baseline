@@ -1,13 +1,14 @@
 <script setup>
 import { onBeforeUnmount, onMounted } from 'vue'
 import { modal, resolveModal } from '../ui.js'
+import AppButton from './AppButton.vue'
 
-function close(v) {
-  resolveModal(v)
+function close(value) {
+  resolveModal(value)
 }
 
-function onKey(ev) {
-  if (ev.key === 'Escape') close(false)
+function onKey(event) {
+  if (event.key === 'Escape') close(false)
 }
 
 onMounted(() => document.addEventListener('keydown', onKey))
@@ -15,25 +16,29 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
 </script>
 
 <template>
-  <div v-if="modal.open" id="modal" class="modal" @click.self="close(false)">
-    <div class="mbox" role="dialog" aria-modal="true" aria-labelledby="m-title">
-      <h3 id="m-title">{{ modal.title }}</h3>
-      <p id="m-text">{{ modal.text }}</p>
-      <div v-if="modal.what" id="m-what" class="mwhat">{{ modal.what }}</div>
-      <div class="macts">
-        <button id="m-cancel" type="button" @click="close(false)">取消</button>
-        <button id="m-ok" type="button" :class="{ danger: modal.danger }" @click="close(true)">
+  <div v-if="modal.open" id="modal" class="confirm-modal" @click.self="close(false)">
+    <div
+      class="confirm-modal__box"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-modal-title"
+    >
+      <h2 id="confirm-modal-title" class="confirm-modal__title">{{ modal.title }}</h2>
+      <p class="confirm-modal__text">{{ modal.text }}</p>
+      <p v-if="modal.what" class="confirm-modal__what">{{ modal.what }}</p>
+
+      <div class="confirm-modal__actions">
+        <AppButton @click="close(false)">取消</AppButton>
+        <AppButton :variant="modal.danger ? 'danger' : 'primary'" @click="close(true)">
           {{ modal.ok }}
-        </button>
+        </AppButton>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped lang="scss">
-// 危险动作（删规则、删目标）一律走这里：把「要删的是什么」摆在眼前，
-// 代价是打断一次——删除值得这一次打断。
-.modal {
+.confirm-modal {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -43,55 +48,39 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
   background: rgba(28, 26, 23, 0.32);
 }
 
-.mbox {
+.confirm-modal__box {
   width: min(430px, calc(100vw - var(--page-padding) * 2));
+  padding: var(--space-5);
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
-  padding: var(--space-5);
-
-  h3 {
-    font-size: var(--font-size-5);
-    font-weight: bold;
-    margin-bottom: 8px;
-  }
-
-  p {
-    font-size: var(--font-size-3);
-    color: var(--text-muted);
-  }
-
-  .mwhat {
-    margin-top: 12px;
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius);
-    background: var(--surface-2);
-    font-size: var(--font-size-3);
-    color: var(--text-muted);
-    word-break: break-word;
-  }
 }
 
-.macts {
+.confirm-modal__title {
+  margin-bottom: var(--space-2);
+  font-size: var(--font-size-5);
+  font-weight: bold;
+}
+
+.confirm-modal__text {
+  color: var(--text-muted);
+  font-size: var(--font-size-3);
+}
+
+.confirm-modal__what {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-2);
+  word-break: break-word;
+}
+
+.confirm-modal__actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
   margin-top: var(--space-4);
-
-  button {
-    &:hover {
-      border-color: var(--text-faint);
-      color: var(--text);
-    }
-
-    &.danger {
-      border-color: var(--rose);
-      color: var(--rose-text);
-
-      &:hover {
-        background: var(--rose-background);
-      }
-    }
-  }
 }
 </style>

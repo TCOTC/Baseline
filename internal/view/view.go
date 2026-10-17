@@ -1,8 +1,7 @@
 // Package view 把库里的东西算成**一屏可以照着画的数据**。
 //
-// 这一层是原来 render.rs 的位置，但不再出 HTML：出 JSON。
-// 数字、位移、曲线路径、甚至「+3 / 持平 / 还没有记录」这句话，都在这里定——
-// 前端一行算术都不写。两边各算一次，迟早会显示成两个数。
+// 这一层只出 JSON，不出 HTML。数字、位移、曲线路径、甚至「+3 / 持平 / 还没有记录」这句话，
+// 都在这里定——前端一行算术都不写。两边各算一次，迟早会显示成两个数。
 package view
 
 import (
@@ -20,7 +19,7 @@ import (
 // Curve 是卡片/详情页上那条阶梯线。
 //
 // Path 已经是 SVG 的 d 属性，由 Go 算好——曲线怎么画是**数字的另一种说法**，
-// 不该在 Vue 里再实现一遍（原来 render.rs 里那 15 行照搬过来）。
+// 不该在 Vue 里再实现一遍。
 type Curve struct {
 	Kind   string  `json:"kind"` // line | empty | unwired
 	Path   string  `json:"path"`
@@ -65,8 +64,8 @@ type Warning struct {
 
 // Row 是流水里的一行：日期分隔行（k=d）或记录行（k=e）。
 //
-// 字段名故意保持小写：虚拟滚动的行结构是从旧版 view.js 原样搬过来的，
-// 改名只会让两边的差异变成「长得像但不对」。
+// 字段名故意保持小写：前端虚拟滚动直接按这些字段名读行数据，
+// 改成驼峰要两边同时改，容易变成「长得像但不对」。
 type Row struct {
 	K      string    `json:"k"`
 	Label  string    `json:"label,omitempty"`
@@ -621,9 +620,8 @@ func rowsOf(checkins []model.Checkin, goals map[int64]model.Goal, sources map[in
 			text = strings.TrimSpace(c.Note)
 		}
 
-		// 那句「手工打卡」下面要写出**这条记录算在哪条规则上**。
-		// 在这之前，规则只印在卡片底部——那是「这个目标怎么算」，
-		// 而一条记录究竟归到了哪一句，界面上没有任何地方说。
+		// 那句「手工打卡」下面要写出**这条记录算在哪条规则上**：
+		// 卡片底部只说明「这个目标怎么算」，不说明这一条记录究竟归到了哪一句。
 		var ruleNames []string
 		for _, l := range c.Links {
 			if l.SourceID == nil {

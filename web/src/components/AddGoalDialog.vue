@@ -1,20 +1,16 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { api } from '../api.js'
+import { findKind } from '../kinds.js'
+import AppButton from './AppButton.vue'
+import AppInput from './AppInput.vue'
+import Notice from './Notice.vue'
+import SourceKindPicker from './SourceKindPicker.vue'
 
-// 新建目标是**四步固定骨架 + 一步收口**，不是自由聊天。
-//
-// 固定骨架解决的是「自由聊天只能靠 prompt 求它自觉」：步数就是步数，
-// 而「什么不算」这一问永远不会被跳过。AI 在这里没有位置——
-// 要问什么是产品定死的，判据也全是机械的。
+// 新建目标是四步固定骨架 + 一步收口，不是自由聊天。
+// 固定骨架解决的是「自由聊天只能靠 prompt 求它自觉」：
+// 步数就是步数，而「什么不算」这一问永远不会被跳过。
 const emit = defineEmits(['close', 'created'])
-
-const KINDS = [
-  { k: 'manual_checkin', name: '手工打卡', desc: '我自己记一次。比如「读完一章算一次」', need: false },
-  { k: 'git_commits', name: 'git 提交', desc: '某个仓库的提交数。还没接入，先登记规则', need: true, ask: '哪个仓库？（先填名字，接上之后才会计数）' },
-  { k: 'external_metric', name: '外部数据', desc: '读别处已经记着的数，比如复习记录', need: true, ask: '读哪份数据？（先填标识，接上之后才会计数）' },
-  { k: 'derived', name: '组合', desc: '上面几条按公式算', need: false },
-]
 
 const STEP_NAMES = ['想推进什么', '为什么是现在', '什么算推进它', '什么不算', '落到哪种来源']
 const FIELDS = ['title', 'why', 'rule', 'notrule']
@@ -35,19 +31,12 @@ const inputVal = ref('')
 const askingTarget = ref(false)
 const busy = ref(false)
 const inputEl = ref(null)
-const dlgEl = ref(null)
 
-const kindSpec = computed(() => KINDS.find((x) => x.k === d.value.kind) || KINDS[0])
+const kindSpec = computed(() => findKind(d.value.kind))
 
 function focusInput() {
   const go = () => {
-    const el = inputEl.value
-    if (!el || document.activeElement === el) return
-    try {
-      el.focus()
-    } catch {
-      /* 忽略 */
-    }
+    if (inputEl.value && document.activeElement !== inputEl.value) inputEl.value.focus()
   }
   // 写完 DOM 立刻 focus 会被静默忽略——不报错，只是没生效。
   nextTick(() => {
@@ -75,33 +64,33 @@ function nav() {
 }
 
 function next() {
-  const v = inputVal.value.trim()
+  const value = inputVal.value.trim()
   if (askingTarget.value) {
     takeTarget()
     return
   }
   switch (d.value.step) {
     case 0:
-      if (!v) {
+      if (!value) {
         d.value.problem = '总得先有个名字。'
         return
       }
-      d.value.title = v
+      d.value.title = value
       break
     case 1:
-      d.value.why = v // 可以不填：不是每个目标都需要问目的
+      d.value.why = value // 可以不填：不是每个目标都需要问目的
       break
     case 2:
-      if (!v) {
+      if (!value) {
         // 这是「必须再问」的落点：收不出一条可计算的规则，就不该往下走。
         d.value.problem =
           '这条填不了。没有它，这个目标给不出「什么算推进它」——曲线永远不会动，它也就不是目标，只是一句愿望。'
         return
       }
-      d.value.rule = v
+      d.value.rule = value
       break
     case 3:
-      d.value.notrule = v
+      d.value.notrule = value
       break
     default:
       return
@@ -109,11 +98,11 @@ function next() {
   nav()
 }
 
-function pickKind(k) {
-  const spec = KINDS.find((x) => x.k === k) || KINDS[0]
-  d.value.kind = k
+function pickKind(value) {
+  const spec = findKind(value)
+  d.value.kind = value
   d.value.problem = ''
-  if (spec.need) {
+  if (spec.needsTarget) {
     // 需要 target 的来源：先问清对象。空着就等于「什么都算」。
     askingTarget.value = true
     return
@@ -123,15 +112,15 @@ function pickKind(k) {
 }
 
 function takeTarget() {
-  const v = inputVal.value.trim()
-  if (!v) {
+  const value = inputVal.value.trim()
+  if (!value) {
     d.value.problem =
       '空着就等于「什么都算」——那条规则会把所有活动都装进来，曲线永远在涨，也就不告诉你偏了。'
     askingTarget.value = true
     focusInput()
     return
   }
-  d.value.target = v
+  d.value.target = value
   askingTarget.value = false
   d.value.problem = ''
   d.value.step = 5
@@ -176,282 +165,244 @@ async function create() {
   }
 }
 
-function onKey(ev) {
-  if (ev.key !== 'Enter' || ev.isComposing || ev.keyCode === 229) return
-  const tag = ev.target && ev.target.tagName
+function onKey(event) {
+  if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return
+  const tag = event.target && event.target.tagName
   if (tag !== 'INPUT') return
-  ev.preventDefault()
+  event.preventDefault()
   if (d.value.step === 5) create()
   else next()
 }
 </script>
 
 <template>
-  <div ref="dlgEl" id="dlg" class="dlg" @keydown="onKey">
-    <div class="dlg-steps">
+  <section id="dlg" class="add-goal-dialog" @keydown="onKey">
+    <div class="add-goal-dialog__steps">
       <div
-        v-for="(name, i) in STEP_NAMES"
+        v-for="(name, index) in STEP_NAMES"
         :key="name"
-        :class="i < d.step ? 'done' : i === d.step ? 'now' : ''"
+        class="add-goal-dialog__step"
+        :class="{
+          'add-goal-dialog__step--done': index < d.step,
+          'add-goal-dialog__step--current': index === d.step,
+        }"
       >
-        {{ i + 1 }} · {{ name }}
+        {{ index + 1 }} · {{ name }}
       </div>
     </div>
 
     <template v-if="askingTarget">
-      <h2>{{ kindSpec.name }} · 具体是哪个？</h2>
-      <p class="note">{{ kindSpec.ask }}</p>
-      <input ref="inputEl" v-model="inputVal" type="text" maxlength="120" />
-      <div class="row">
-        <button type="button" class="primary" @click="takeTarget">下一步</button>
-        <button type="button" @click="back">上一步</button>
-        <button type="button" @click="$emit('close')">取消</button>
+      <h2 class="add-goal-dialog__title">{{ kindSpec.label }} · 具体是哪个？</h2>
+      <p class="add-goal-dialog__note">{{ kindSpec.targetPrompt }}</p>
+      <AppInput ref="inputEl" v-model="inputVal" type="text" maxlength="120" />
+      <div class="add-goal-dialog__actions">
+        <AppButton variant="primary" @click="takeTarget">下一步</AppButton>
+        <AppButton @click="back">上一步</AppButton>
+        <AppButton @click="emit('close')">取消</AppButton>
       </div>
-      <div v-if="d.problem" class="cur bad">{{ d.problem }}</div>
+      <Notice v-if="d.problem" tone="danger" class="add-goal-dialog__problem">{{ d.problem }}</Notice>
     </template>
 
     <template v-else-if="d.step === 0">
-      <h2>你想推进什么？</h2>
-      <p class="note">一句话就行。它会是左栏那张卡的标题。</p>
-      <input ref="inputEl" v-model="inputVal" type="text" maxlength="40" placeholder="比如：打牢计算机基础" />
-      <div class="row">
-        <button type="button" class="primary" @click="next">下一步</button>
-        <button type="button" @click="$emit('close')">取消</button>
+      <h2 class="add-goal-dialog__title">你想推进什么？</h2>
+      <p class="add-goal-dialog__note">一句话就行。它会是左栏那张卡的标题。</p>
+      <AppInput
+        ref="inputEl"
+        v-model="inputVal"
+        type="text"
+        maxlength="40"
+        placeholder="比如：打牢计算机基础"
+      />
+      <div class="add-goal-dialog__actions">
+        <AppButton variant="primary" @click="next">下一步</AppButton>
+        <AppButton @click="emit('close')">取消</AppButton>
       </div>
-      <div v-if="d.problem" class="cur bad">{{ d.problem }}</div>
+      <Notice v-if="d.problem" tone="danger" class="add-goal-dialog__problem">{{ d.problem }}</Notice>
     </template>
 
     <template v-else-if="d.step === 1">
-      <h2>为什么是现在？</h2>
-      <p class="note">
+      <h2 class="add-goal-dialog__title">为什么是现在？</h2>
+      <p class="add-goal-dialog__note">
         遇到什么事了，还是在准备什么？<br />
         这一问是为了推出「什么算推进它」，<b>不是问你感受</b>——所以只有在你上一句太宽、推不出规则的时候才问。
       </p>
-      <input ref="inputEl" v-model="inputVal" type="text" maxlength="120" placeholder="比如：想做出自己的产品，但基础不够" />
-      <div class="row">
-        <button type="button" class="primary" @click="next">下一步</button>
-        <button type="button" @click="back">上一步</button>
-        <button type="button" @click="$emit('close')">取消</button>
+      <AppInput
+        ref="inputEl"
+        v-model="inputVal"
+        type="text"
+        maxlength="120"
+        placeholder="比如：想做出自己的产品，但基础不够"
+      />
+      <div class="add-goal-dialog__actions">
+        <AppButton variant="primary" @click="next">下一步</AppButton>
+        <AppButton @click="back">上一步</AppButton>
+        <AppButton @click="emit('close')">取消</AppButton>
       </div>
-      <div v-if="d.problem" class="cur bad">{{ d.problem }}</div>
+      <Notice v-if="d.problem" tone="danger" class="add-goal-dialog__problem">{{ d.problem }}</Notice>
     </template>
 
     <template v-else-if="d.step === 2">
-      <h2>什么算推进它？</h2>
-      <p class="note">
+      <h2 class="add-goal-dialog__title">什么算推进它？</h2>
+      <p class="add-goal-dialog__note">
         越具体越好。一句能装下任何活动的规则等于没有规则——那样的曲线会一直涨，也就永远不告诉你偏了。
       </p>
-      <input ref="inputEl" v-model="inputVal" type="text" maxlength="120" placeholder="比如：读完一章，或做完一章题，算一次" />
-      <div class="row">
-        <button type="button" class="primary" @click="next">下一步</button>
-        <button type="button" @click="back">上一步</button>
-        <button type="button" @click="$emit('close')">取消</button>
+      <AppInput
+        ref="inputEl"
+        v-model="inputVal"
+        type="text"
+        maxlength="120"
+        placeholder="比如：读完一章，或做完一章题，算一次"
+      />
+      <div class="add-goal-dialog__actions">
+        <AppButton variant="primary" @click="next">下一步</AppButton>
+        <AppButton @click="back">上一步</AppButton>
+        <AppButton @click="emit('close')">取消</AppButton>
       </div>
-      <div v-if="d.problem" class="cur bad">{{ d.problem }}</div>
+      <Notice v-if="d.problem" tone="danger" class="add-goal-dialog__problem">{{ d.problem }}</Notice>
     </template>
 
     <template v-else-if="d.step === 3">
-      <h2>什么不算？</h2>
-      <p class="note">
+      <h2 class="add-goal-dialog__title">什么不算？</h2>
+      <p class="add-goal-dialog__note">
         最容易跳过、也最值钱的一问。<br />
         同一件事看起来像在推进它、其实不算的，是什么？<br />
         （例：在 Learn-English 上写代码不算推进「英语」——只算复习记录。<br />
         不划这条边界，那条曲线会假装在涨。）
       </p>
-      <input ref="inputEl" v-model="inputVal" type="text" maxlength="120" placeholder="比如：在它上面写代码、改功能，不算" />
-      <div class="row row-skip">
-        <button id="dlg-skip" type="button" @click="skipBoundary">想不出来，先跳过</button>
+      <AppInput
+        ref="inputEl"
+        v-model="inputVal"
+        type="text"
+        maxlength="120"
+        placeholder="比如：在它上面写代码、改功能，不算"
+      />
+      <div class="add-goal-dialog__skip">
+        <AppButton id="dlg-skip" variant="dashed" @click="skipBoundary">想不出来，先跳过</AppButton>
       </div>
-      <div class="row">
-        <button type="button" class="primary" @click="next">下一步</button>
-        <button type="button" @click="back">上一步</button>
-        <button type="button" @click="$emit('close')">取消</button>
+      <div class="add-goal-dialog__actions">
+        <AppButton variant="primary" @click="next">下一步</AppButton>
+        <AppButton @click="back">上一步</AppButton>
+        <AppButton @click="emit('close')">取消</AppButton>
       </div>
-      <div v-if="d.problem" class="cur bad">{{ d.problem }}</div>
+      <Notice v-if="d.problem" tone="danger" class="add-goal-dialog__problem">{{ d.problem }}</Notice>
     </template>
 
     <template v-else-if="d.step === 4">
-      <h2>这条规则落到哪种来源？</h2>
-      <p class="note">四种，是上限。落到别的上去，它就开始变成另一件东西了。</p>
-      <button v-for="k in KINDS" :key="k.k" type="button" class="kind" @click="pickKind(k.k)">
-        <b>{{ k.name }}</b><span>{{ k.desc }}</span>
-      </button>
-      <div class="row row-cancel">
-        <button type="button" @click="$emit('close')">取消</button>
+      <h2 class="add-goal-dialog__title">这条规则落到哪种来源？</h2>
+      <p class="add-goal-dialog__note">四种，是上限。落到别的上去，它就开始变成另一件东西了。</p>
+      <SourceKindPicker :model-value="d.kind" @update:model-value="pickKind" />
+      <div class="add-goal-dialog__actions add-goal-dialog__actions--cancel">
+        <AppButton @click="emit('close')">取消</AppButton>
       </div>
-      <div v-if="d.problem" class="cur bad">{{ d.problem }}</div>
+      <Notice v-if="d.problem" tone="danger" class="add-goal-dialog__problem">{{ d.problem }}</Notice>
     </template>
 
     <template v-else-if="d.step === 5">
-      <h2>确认一下</h2>
-      <div class="answer"><b>{{ d.title }}</b></div>
-      <div v-if="d.why" class="answer">为什么：{{ d.why }}</div>
-      <div class="answer">算推进：{{ d.rule }}</div>
-      <div class="answer">不算：<template v-if="d.notrule">{{ d.notrule }}</template><b v-else>没划</b></div>
-      <div class="answer">来源：{{ kindSpec.name }}<template v-if="d.target"> · {{ d.target }}</template></div>
-      <div v-if="!d.notrule" class="cur bad">
+      <h2 class="add-goal-dialog__title">确认一下</h2>
+      <p class="add-goal-dialog__answer"><b>{{ d.title }}</b></p>
+      <p v-if="d.why" class="add-goal-dialog__answer">为什么：{{ d.why }}</p>
+      <p class="add-goal-dialog__answer">算推进：{{ d.rule }}</p>
+      <p class="add-goal-dialog__answer">
+        不算：<template v-if="d.notrule">{{ d.notrule }}</template><b v-else>没划</b>
+      </p>
+      <p class="add-goal-dialog__answer">
+        来源：{{ kindSpec.label }}<template v-if="d.target"> · {{ d.target }}</template>
+      </p>
+      <Notice v-if="!d.notrule" tone="danger" class="add-goal-dialog__problem">
         没划边界。以后出现「看起来像在推进它、其实不算」的活动时，这条曲线会说谎——而它会理直气壮地涨。
+      </Notice>
+      <div class="add-goal-dialog__actions">
+        <AppButton variant="primary" :disabled="busy" @click="create">建这个目标</AppButton>
+        <AppButton @click="emit('close')">取消</AppButton>
       </div>
-      <div class="row row-confirm">
-        <button type="button" class="primary" :disabled="busy" @click="create">建这个目标</button>
-        <button type="button" @click="$emit('close')">取消</button>
-      </div>
-      <div v-if="d.problem" class="cur bad">{{ d.problem }}</div>
+      <Notice v-if="d.problem" tone="danger" class="add-goal-dialog__problem">{{ d.problem }}</Notice>
     </template>
 
     <template v-else-if="d.step === 6">
-      <h2>建好了</h2>
-      <div class="cur">
+      <h2 class="add-goal-dialog__title">建好了</h2>
+      <p class="add-goal-dialog__answer">
         当前值 <b>{{ d.valueText }}</b> 次<br />
         <template v-if="d.value === 0">
           还是 0。要么规则写错了，要么这条线真的还没动——两种都值得知道。
         </template>
         <template v-else>规则一写完就算出了数，说明它是可计算的。</template>
-      </div>
-      <div class="row row-confirm">
-        <button type="button" class="primary" @click="$emit('created')">好</button>
+      </p>
+      <div class="add-goal-dialog__actions">
+        <AppButton variant="primary" @click="emit('created')">好</AppButton>
       </div>
     </template>
-  </div>
+  </section>
 </template>
 
 <style scoped lang="scss">
-// 只占右栏。目标是在左栏的卡片列里诞生的，对话不该跳到一个和卡片无关的整屏页面去。
-.dlg {
+// 只占右栏。目标是在左栏的卡片列里诞生的，对话不该跳到整屏页面去。
+.add-goal-dialog {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: var(--space-1) calc(var(--page-padding) + var(--page-margin)) var(--space-6) var(--space-1);
+}
 
-  .dlg-steps {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    margin-bottom: 22px;
+.add-goal-dialog__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--space-5);
+}
 
-    div {
-      font-size: var(--font-size-2);
-      color: var(--text-faint);
+.add-goal-dialog__step {
+  font-size: var(--font-size-2);
+  color: var(--text-faint);
 
-      &.done {
-        color: var(--text-muted);
-      }
-
-      &.now {
-        color: var(--text);
-        font-weight: bold;
-      }
-    }
-  }
-
-  h2 {
-    font-size: var(--font-size-5);
-    font-weight: bold;
-    margin-bottom: 6px;
-  }
-
-  p.note {
-    font-size: var(--font-size-3);
+  &--done {
     color: var(--text-faint);
-    margin-bottom: 14px;
   }
 
-  .answer {
-    font-size: var(--font-size-3);
+  &--current {
     color: var(--text-muted);
-    margin-bottom: 4px;
-
-    b {
-      color: var(--text);
-      font-weight: bold;
-    }
+    font-weight: bold;
   }
+}
 
-  input[type="text"] {
-    width: 100%;
-    background: var(--surface);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius);
-    padding: 10px 12px;
-    font-size: var(--font-size-3);
+.add-goal-dialog__title {
+  margin-bottom: var(--space-2);
+  font-size: var(--font-size-6);
+  font-weight: bold;
+}
+
+.add-goal-dialog__note {
+  margin-bottom: var(--space-3);
+  font-size: var(--font-size-2);
+  color: var(--text-muted);
+}
+
+.add-goal-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.add-goal-dialog__actions--cancel {
+  margin-top: var(--space-4);
+}
+
+.add-goal-dialog__skip {
+  margin-top: var(--space-2);
+}
+
+.add-goal-dialog__answer {
+  margin-bottom: var(--space-1);
+  font-size: var(--font-size-2);
+  color: var(--text-muted);
+
+  b {
+    font-weight: bold;
     color: var(--text);
-    outline: none;
-    margin-bottom: 12px;
-
-    &:focus {
-      border-color: var(--blue);
-    }
   }
+}
 
-  .row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
-  // 几个只差一点间距的动作行（内联 style 收进来的）。
-  .row-skip {
-    margin-bottom: var(--space-2);
-  }
-
-  .row-cancel {
-    margin-top: var(--space-3);
-  }
-
-  .row-confirm {
-    margin-top: var(--space-4);
-  }
-
-  // 通用按钮。**排除 .kind**：那是全局共享的来源按钮，scoped 的 `.dlg button`
-  // 会以更高优先级把它的内边距和排版盖掉。
-  button:not(.kind) {
-    &:hover {
-      border-color: var(--text-faint);
-      color: var(--text);
-    }
-
-    &.primary {
-      background: var(--surface-2);
-      color: var(--text);
-
-      &:hover {
-        border-color: var(--text-faint);
-      }
-    }
-
-    &[disabled] {
-      opacity: 0.45;
-
-      &:hover {
-        border-color: var(--border-strong);
-        color: var(--text-muted);
-      }
-    }
-  }
-
-  .cur {
-    margin-top: 14px;
-    padding: var(--space-3) var(--space-4);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-    font-size: var(--font-size-3);
-    color: var(--text-muted);
-
-    b {
-      font-size: var(--font-size-6);
-      color: var(--text);
-      font-weight: bold;
-      font-variant-numeric: tabular-nums;
-      margin-right: 3px;
-    }
-  }
-
-  .bad {
-    border-color: var(--border-strong);
-    background: var(--surface-2);
-    color: var(--text-muted);
-  }
+.add-goal-dialog__problem {
+  margin-top: var(--space-3);
 }
 </style>
