@@ -1,4 +1,4 @@
-﻿# 用演示数据跑通全流程，用来验证渲染结果。
+﻿# 用演示数据跑通全流程，用来验证界面和数字。
 # 用法：pwsh -File scripts/demo.ps1
 # 会写 data/_demo.db（data/ 已被 gitignore）
 
@@ -6,8 +6,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$exe = Join-Path $root 'target\debug\baseline.exe'
-if (-not (Test-Path $exe)) { throw "先 cargo build" }
+$exe = Join-Path $root 'bin\baseline.exe'
+if (-not (Test-Path $exe)) { throw "先 go build -o bin\baseline.exe ./cmd/baseline" }
 
 $db = 'data/_demo.db'
 if (Test-Path $db) { Remove-Item $db -Force }
@@ -67,7 +67,8 @@ B tick
 Write-Output "`n── status ──" 
 B status
 
-Write-Output "`n── render ──" 
-B render --out data/_demo.html
+Write-Output "`n── 打开界面 ──" 
+Write-Output "  .\bin\baseline.exe --db $db serve --debug"
+Write-Output "  然后打开 http://127.0.0.1:7717"
 
-Write-Output "`n完成。用浏览器打开 data/_demo.html" 
+Write-Output "`n完成。"

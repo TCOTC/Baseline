@@ -1,0 +1,673 @@
+/* 基线 / Baseline — 视图样式
+ * 基准：设计规范 v1.0（界面方案/设计规范.html）
+ * 纪律：零硬编码颜色，一切走 CSS 变量；目标色只通过 .blue/.green/... 类注入。
+ */
+
+*{margin:0;padding:0;box-sizing:border-box}
+
+:root{
+  --bg:#fafaf8; --sf:#fff; --sf-2:#f5f4f2; --bd:#ece9e3; --bd-2:#e0dcd4;
+  --tx:#1c1a17; --tx-2:#6f6a62; --tx-3:#a8a29a; --line:#d8d1c5;
+  --ff:"Inter","PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  --ff-mono:ui-monospace,"Cascadia Mono","SF Mono",Consolas,"Courier New",monospace;
+  /* 系统图标字体。窗口按钮的四个字形（E921/E922/E923/E8BB）和设置的齿轮都从这里来——
+     写成两处的话，换字体时只会改到其中一处。 */
+  --ff-icon:"Segoe Fluent Icons","Segoe MDL2 Assets";
+  --blue:#4a6fd4;  --blue-bg:#f0f4ff;  --blue-bd:#dce5fd;  --blue-tx:#2b3f7f;
+  --cyan:#0f8f9b;  --cyan-bg:#ecf9fa;  --cyan-bd:#cbe9ec;  --cyan-tx:#0a5560;
+  --green:#0f9b7a; --green-bg:#eefaf6; --green-bd:#cdeee2; --green-tx:#0a5f4b;
+  --amber:#c1871d; --amber-bg:#fdf6ea; --amber-bd:#f4e2bd; --amber-tx:#7a5310;
+  --rose:#b8477a;  --rose-bg:#fdf2f7;  --rose-bd:#f7d6e5;  --rose-tx:#71284b;
+  --violet:#6d5bd0;--violet-bg:#f3f1fe;--violet-bd:#e2ddfb;--violet-tx:#3f3480;
+  --slate:#6b7280; --slate-bg:#f4f5f7; --slate-bd:#e3e5ea; --slate-tx:#3f4550;
+
+  /* 内容宽度与内边距。窗口比内容宽时两侧留出的空白由 --outer 算出来。
+     网格横跨整个窗口（右侧滚动条才贴得住窗口边缘），
+     内容的 1120px 靠 --pad + --outer 对齐。 */
+  --content:1120px;
+  --pad:30px;
+  --outer:max(0px, (100vw - var(--content)) / 2);
+
+  /* 流水的行高。虚拟滚动靠它算总高和偏移，所以必须是固定值——
+     行高一变（备注换行、字号跟随系统），滚动位置立刻就会飘。
+     值只有这一处，LogList.vue 用 getComputedStyle 读它，两边不会各写一份。 */
+  --row-day:34px;
+  --row-entry:46px;
+
+  /* 窗口按钮。前四个的取值来自实测：在真实的 Windows 11 标题栏上
+     （DeepSeek Harness 的 WCO 覆盖层）悬停取样，再在原生的 regedit 窗口上交叉验证。 */
+  --cap-ink:#0f1115;          /* 实测 */
+  --cap-hover:#d8d9da;        /* 实测 */
+  --cap-close:#e81123;        /* 实测（活动窗口） */
+  --cap-close-ink:#fff;       /* 实测 */
+  /* 下面两个没测到：活动窗口的按下态需要抢占前台才能取样，
+     Windows 的前台锁定不允许后台进程这么做。取同族值——
+     关闭键按下去变浅，这一点在非活动窗口上实测到了（#c42b1c → #c84030）。 */
+  --cap-press:#c9cacb;
+  --cap-close-press:#f1707a;
+}
+
+.blue  {--c:var(--blue);  --cbg:var(--blue-bg);  --cbd:var(--blue-bd);  --ctx:var(--blue-tx)}
+.cyan  {--c:var(--cyan);  --cbg:var(--cyan-bg);  --cbd:var(--cyan-bd);  --ctx:var(--cyan-tx)}
+.green {--c:var(--green); --cbg:var(--green-bg); --cbd:var(--green-bd); --ctx:var(--green-tx)}
+.amber {--c:var(--amber); --cbg:var(--amber-bg); --cbd:var(--amber-bd); --ctx:var(--amber-tx)}
+.rose  {--c:var(--rose);  --cbg:var(--rose-bg);  --cbd:var(--rose-bd);  --ctx:var(--rose-tx)}
+.violet{--c:var(--violet);--cbg:var(--violet-bg);--cbd:var(--violet-bd);--ctx:var(--violet-tx)}
+.slate {--c:var(--slate); --cbg:var(--slate-bg); --cbd:var(--slate-bd); --ctx:var(--slate-tx)}
+.none  {--c:#a8a29a; --cbg:transparent; --cbd:#e0dcd4; --ctx:#78716c}
+
+/* 整页不滚动，滚动交给左右两栏各自负责。
+   一列是「三条曲线的现状」，一列是「这些天做过什么」——两者的长度差得很远，
+   绑在同一个滚动条上时，看时间线就一定会把卡片推出视野。 */
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--tx); font-family:var(--ff);
+  font-size:14px; line-height:1.55; -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+  display:flex; flex-direction:column;
+}
+/* 不再限制宽度。网格要一直伸到窗口右边缘，右侧滚动条才贴得住窗口边；
+   内容的 1120px 由 .cols 的左内边距和 .right 的右内边距对齐。 */
+.wrap{
+  flex:1; min-height:0; min-width:0;
+  display:flex; flex-direction:column;
+}
+
+/* ---------------- 窗口顶栏 ---------------- */
+/* 只在 Electron 窗口里出现；浏览器里没有它——
+   一排点了没反应的按钮比没有按钮更糟。
+
+   尺寸和颜色不是设计的，是照 Windows 自己的标题栏**量**出来的：
+   按钮 46×40、图标 10px、hover #d8d9da、关闭键 hover #e81123。
+   图标直接用 Segoe Fluent Icons（和系统标题栏同一个字体），
+   所以形状不可能不一样——这比手画 SVG 靠谱，也不会在 DPI 缩放下发虚。
+
+   横跨整个窗口宽度：它不是页面的头部，是窗口的边框。 */
+.bar{
+  flex:none; height:40px; display:flex; align-items:stretch;
+  user-select:none; -webkit-user-select:none;
+}
+.bar .drag{flex:1}
+.wbtn{
+  flex:none; width:46px; display:grid; place-items:center;
+  background:none; border:0; padding:0 0 3px;
+  font-family:var(--ff-icon);
+  font-size:10px; line-height:1;
+  color:var(--cap-ink);
+  cursor:default; outline:none;
+  /* 关掉次像素抗锯齿。Windows 上的 Chromium 默认给文字上 LCD 次像素渲染，
+     图标边缘会泛蓝泛橙；系统标题栏的图标是灰度的——实测它的通道色差是 6，
+     开着次像素是 130 以上，摆在一起一眼就看得出不是一家的。
+     -webkit-font-smoothing 在 Windows 上不起作用，实测无效；
+     提到独立合成层才真的关掉（透明背底的合成层不允许 LCD 文字）。 */
+  -webkit-font-smoothing:antialiased;
+  transform:translateZ(0);
+  /* 字体的墨迹在行框里偏下 1.33px，和系统标题栏比会低一截。 */
+  /* padding 已经把内容盒上移了 1.5px，见上面的 padding 简写。 */
+}
+.wbtn:hover{background:var(--cap-hover)}
+.wbtn:active{background:var(--cap-press)}
+.wbtn.close:hover{background:var(--cap-close); color:var(--cap-close-ink)}
+.wbtn.close:active{background:var(--cap-close-press); color:var(--cap-close-ink)}
+
+/* ---------------- 双栏 ---------------- */
+.cols{
+  flex:1; min-height:0; display:grid;
+  grid-template-columns:308px 1fr; gap:34px;
+  padding:10px 0 0 calc(var(--pad) + var(--outer));
+}
+/* 左栏：卡片自己滚，「新建目标」钉在底部左下角。
+   钉住而不是跟着滚——它是这一栏的入口，不该被三张卡挤出视野。 */
+.left{display:flex; flex-direction:column; min-height:0}
+.goals{
+  flex:1; min-height:0; display:flex; flex-direction:column; gap:12px;
+  overflow-y:auto; overflow-x:hidden;
+  padding-bottom:12px;
+}
+/* 底边距和输入框的 18px 对齐：左栏的加号和右栏那个框的底边应当落在同一条线上，
+   差 4px 眼睛看得出来，而且说不出哪里别扭。 */
+.lfoot{flex:none; display:flex; align-items:center; gap:8px; margin:6px 0 18px}
+.addgoal{
+  flex:none; align-self:flex-start;
+  display:flex; align-items:center; gap:7px;
+  margin:0; padding:7px 12px 7px 10px;
+  background:none; border:1px dashed var(--bd-2); border-radius:10px;
+  color:var(--tx-3); font:inherit; font-size:12.5px; cursor:default;
+}
+.addgoal svg{display:block; width:11px; height:11px}
+.addgoal:hover{border-color:var(--tx-3); color:var(--tx-2)}
+.addgoal[disabled]{opacity:.45}
+/* 齿轮：和「新建目标」同一排、在它左边。用 Segoe Fluent Icons 的字符而不是自己画 SVG——
+   和顶栏那三个按钮同一个理由（形状与 DPI 缩放交给 Windows，自己画会糊或出台阶）。 */
+.gear{
+  flex:none; width:32px; height:32px; display:flex; align-items:center;
+  justify-content:center; padding:0;
+  background:none; border:1px solid transparent; border-radius:10px;
+  color:var(--tx-3); font-family:var(--ff-icon); font-size:15px; line-height:1;
+  cursor:default; transform:translateZ(0);
+}
+.gear:hover{border-color:var(--bd-2); color:var(--tx-2)}
+.addgoal[disabled]:hover{border-color:var(--bd-2); color:var(--tx-3)}
+
+/* 右栏：一条流水 + 底部输入框。
+   右栏一直伸到窗口右边缘，**内边距一律加在真正滚动/装内容的那个元素上**，
+   不要加在 .right 上——加在父级会把 .log 整体往左推，滚动条跟着进来一百多像素，
+   看起来就是「滚动条不靠边了」。 */
+.right{display:flex; flex-direction:column; min-height:0}
+.log{
+  flex:1; min-height:0; overflow-y:auto; overflow-x:hidden;
+  scrollbar-gutter:stable;
+  padding:0 calc(var(--pad) + var(--outer)) 16px 0;
+}
+/* 虚拟滚动的画布：整条流水的高度撑在这里，可见的那几十行绝对定位在里面。
+   画布高度 = 所有行的固定高度之和，行本身不参与文档流。 */
+.log-canvas{position:relative}
+.log-rows{position:absolute; left:0; right:0; top:0}
+.log-hint{padding:24px 2px; color:var(--tx-3); font-size:13px; line-height:1.9}
+.log-hint code{font-family:var(--ff-mono);font-size:12.5px;background:var(--sf-2);
+  padding:2px 7px;border-radius:5px;color:var(--tx-2)}
+
+/* ---------------- 底部输入框 ---------------- */
+/* 上下两层：上面写文本，下面一行左边是「记到哪个目标」、右边是「记下」。
+   整个框是一个圆角矩形，里面全是无边框元素——边框和焦点态由框负责，
+   这样「光标在框里」是一件看得见的事。
+   目标按钮摆在下面那行而不是输入区上方：关联目标是这条记录的**属性**，
+   不是记录本身；摆在上面会让人以为得先选目标才能打字。 */
+.composer{
+  flex:none; position:relative;
+  padding:10px calc(var(--pad) + var(--outer)) 18px 0;
+}
+/* display:flex 会盖掉 [hidden] 自带的 display:none，得自己写一条。 */
+.composer[hidden]{display:none}
+.composer .box{
+  display:flex; flex-direction:column;
+  background:var(--sf); border:1px solid var(--bd-2); border-radius:12px;
+  padding:8px 8px 8px 12px;
+}
+.composer .box:focus-within{border-color:var(--blue)}
+.composer textarea{
+  display:block; width:100%;
+  border:0; background:none; outline:none; resize:none;
+  font:inherit; font-size:13.5px; line-height:1.5; color:var(--tx);
+  padding:2px 0 6px; margin:0;
+  /* 高度由 JS 按内容撑，这里给个上限，免得一句话糊满半个窗口 */
+  max-height:160px; overflow-y:auto;
+}
+.composer textarea::placeholder{color:var(--tx-3)}
+.composer .crow{display:flex; align-items:center; gap:8px}
+
+/* 目标标签：**列全所有目标**，点一下选中、再点一下取消，可以多选。
+   一行放不下就整排收起来，只留「…」——由 JS 量完宽度决定（见 fitChips）。 */
+.composer .gchips{
+  flex:1; min-width:0; display:flex; align-items:center; gap:5px;
+  overflow:hidden;
+}
+.composer .gchips[hidden]{display:none}
+.composer .gchip{
+  display:inline-flex; align-items:center; gap:6px; flex:none;
+  background:none; border:1px solid transparent; border-radius:99px;
+  padding:4px 10px 4px 8px; font:inherit; font-size:12px; color:var(--tx-3);
+  cursor:default; white-space:nowrap;
+}
+.composer .gchip i{width:7px; height:7px; border-radius:50%; flex:none;
+  background:transparent; box-shadow:inset 0 0 0 1.5px var(--bd-2)}
+.composer .gchip:hover{border-color:var(--bd-2); color:var(--tx-2)}
+/* 选中：实心点 + 目标自己的底色。没选中的一律是空心点。 */
+.composer .gchip.on{background:var(--cbg); border-color:var(--cbd); color:var(--ctx);
+  font-weight:650}
+.composer .gchip.on i{background:var(--c); box-shadow:none}
+/* 规则里没有手工打卡的目标：标签画成虚线，选得中但不计分。 */
+.composer .gchip.noscore.on{border-style:dashed}
+
+.composer .gmore{
+  flex:none; background:none; border:1px solid var(--bd-2); border-radius:99px;
+  padding:4px 11px; font:inherit; font-size:13px; line-height:1.2;
+  color:var(--tx-3); cursor:default;
+}
+.composer .gmore:hover{border-color:var(--tx-3); color:var(--tx-2)}
+.composer .gmore.on{border-color:var(--cbd); background:var(--sf-2); color:var(--tx)}
+.composer .gmore[hidden]{display:none}
+
+/* 往上弹，不往下：下面是窗口边缘。 */
+.composer .gmenu{
+  position:absolute; left:calc(var(--pad) + var(--outer)); bottom:100%;
+  margin-bottom:6px; min-width:230px; max-width:420px;
+  background:var(--sf); border:1px solid var(--bd-2); border-radius:12px;
+  padding:6px; box-shadow:0 8px 24px rgba(0,0,0,.09); z-index:20;
+  display:flex; flex-direction:column; gap:1px;
+}
+.composer .gmenu[hidden]{display:none}
+.composer .gmenu-h{padding:6px 9px 8px; font-size:11.5px; color:var(--tx-3);
+  border-bottom:1px solid var(--bd); margin-bottom:4px}
+.composer .gmenu-h span{display:block; color:var(--tx-3); opacity:.8}
+.composer .gopt{
+  display:flex; align-items:center; gap:8px; text-align:left;
+  background:none; border:0; border-radius:8px; padding:7px 9px;
+  font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default;
+}
+.composer .gopt:hover{background:var(--sf-2)}
+.composer .gopt.on{color:var(--tx); font-weight:650; background:var(--sf-2)}
+.composer .gopt i{width:8px; height:8px; border-radius:50%; flex:none;
+  background:transparent; box-shadow:inset 0 0 0 1.5px var(--bd-2)}
+.composer .gopt.on i{background:var(--c); box-shadow:none}
+.composer .gopt.noscore.on i{background:transparent; box-shadow:inset 0 0 0 2px var(--c)}
+.composer .gopt .gn{flex:none}
+.composer .gopt em{margin-left:auto; padding-left:10px; font-style:normal;
+  font-size:11px; color:var(--tx-3); font-weight:400}
+
+/* 规则气泡：在输入区**上面**、左对齐，和下面那排目标气泡分成两层。
+   上面是「这条记录算在哪条规则上」，下面是「它推进了哪些目标」。
+   不做浮层——浮层会盖住流水，而这件事要在打字的时候一直看得见。
+
+   形状是圆角矩形（不是下面那种胶囊）：两种气泡长得一样的话，
+   扫一眼分不出哪排是目标、哪排是规则。 */
+.composer .rules{
+  display:flex; align-items:center; flex-wrap:wrap; gap:6px;
+  padding:2px 2px 8px;
+}
+.composer .rules[hidden]{display:none}
+.composer .rules-list{display:flex; align-items:center; flex-wrap:wrap; gap:6px}
+/* 有多个目标时才写目标名，否则它就是噪音——下面那排目标气泡里已经亮着它了。 */
+.composer .rgroup{font-size:11px; color:var(--ctx); font-weight:650; flex:none;
+  margin-left:4px}
+.composer .rules-list > .rgroup:first-child{margin-left:0}
+.composer .rchip{
+  background:none; border:1px solid var(--bd-2); border-radius:8px;
+  padding:4px 9px; font:inherit; font-size:12px; color:var(--tx-2);
+  cursor:default; max-width:260px; overflow:hidden; white-space:nowrap;
+  text-overflow:ellipsis;
+}
+.composer .rchip:hover{border-color:var(--tx-3); color:var(--tx)}
+.composer .rchip.on{background:var(--cbg); border-color:var(--cbd); color:var(--ctx);
+  font-weight:650}
+/* 「两条规则都能收它」但没指认时亮着，选了一条就灭。 */
+.composer .rules.broke .rchip{border-color:var(--rose); color:var(--rose-tx)}
+
+.composer .send{
+  flex:none;
+  background:none; border:1px solid var(--bd-2); border-radius:9px;
+  padding:6px 12px; font:inherit; font-size:12.5px; color:var(--tx-2);
+  cursor:default;
+}
+.composer .send:hover{border-color:var(--tx-3); color:var(--tx)}
+.composer.busy .box,.composer.busy .send{opacity:.5}
+/* 提交失败时把框描红——只把按钮变灰会让人以为「点了没反应」。 */
+.composer.broke .box{border-color:var(--rose)}
+.composer.broke textarea::placeholder{color:var(--rose-tx)}
+
+/* 流水的一行。高度必须是**固定值**——虚拟滚动靠它算总高和偏移，
+   行高一变，滚动位置就会飘。所以备注不换行，超长省略（悬停看全文）。 */
+/* 日期用的是**和下面记录同一个 46px 时间列**，右对齐。
+   两条竖轴对齐之后，扫一列日期和扫一列时间才是同一个动作；
+   原来日期从行首起、时间右对齐到 46px，看着就是「偏左一点」，
+   而那一点说不清差在哪。 */
+.day{height:var(--row-day); display:grid;
+  grid-template-columns:46px 22px 1fr auto; gap:10px; align-items:end;
+  padding:0 0 7px}
+.entry{height:var(--row-entry); display:grid;
+  grid-template-columns:46px 22px 1fr auto; gap:10px; align-items:start;
+  padding-top:6px}
+.entry .act{white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+
+/* 滚动条走同一套：细、圆头、无箭头，静的时候几乎看不见。
+   轨道占满窗口最右侧 10px，滑块靠 2px 同色内边距收窄——
+   既贴住窗口边缘，又不会粗得像一条边。
+   **凡是能滚的地方都要列在这里。** 漏掉一个，那一处的滚动条就是系统默认那条
+   又宽又深的灰杠，和别处放一起非常显眼（详情页就这么翻过车）。 */
+.goals::-webkit-scrollbar,
+.log::-webkit-scrollbar,
+.detail::-webkit-scrollbar,
+.dlog::-webkit-scrollbar,
+.dlg::-webkit-scrollbar,
+.composer textarea::-webkit-scrollbar{width:10px; height:10px}
+.goals::-webkit-scrollbar-track,
+.log::-webkit-scrollbar-track,
+.detail::-webkit-scrollbar-track,
+.dlog::-webkit-scrollbar-track,
+.dlg::-webkit-scrollbar-track,
+.composer textarea::-webkit-scrollbar-track{background:transparent}
+.goals::-webkit-scrollbar-thumb,
+.log::-webkit-scrollbar-thumb,
+.detail::-webkit-scrollbar-thumb,
+.dlog::-webkit-scrollbar-thumb,
+.dlg::-webkit-scrollbar-thumb,
+.composer textarea::-webkit-scrollbar-thumb{
+  background:var(--bd-2); border-radius:99px; border:2px solid var(--bg);
+}
+.goals::-webkit-scrollbar-thumb:hover,
+.log::-webkit-scrollbar-thumb:hover,
+.detail::-webkit-scrollbar-thumb:hover,
+.dlog::-webkit-scrollbar-thumb:hover,
+.dlg::-webkit-scrollbar-thumb:hover,
+.composer textarea::-webkit-scrollbar-thumb:hover{
+  background:var(--tx-3);
+}
+.goals::-webkit-scrollbar-corner,
+.detail::-webkit-scrollbar-corner,
+.dlog::-webkit-scrollbar-corner{background:transparent}
+
+/* ---------------- 新建目标对话 ---------------- */
+/* 只占右栏。目标是在左栏的卡片列里诞生的，对话不该跳到一个和卡片无关的整屏页面去。 */
+.dlg{flex:1; min-height:0; overflow-y:auto;
+  padding:4px calc(var(--pad) + var(--outer)) 30px 2px}
+.dlg-steps{display:flex; flex-direction:column; gap:2px; margin-bottom:22px}
+.dlg-steps div{font-size:11.5px; color:var(--tx-3); line-height:1.9}
+.dlg-steps div.done{color:var(--tx-2)}
+.dlg-steps div.now{color:var(--tx); font-weight:650}
+.dlg h2{font-size:15px; font-weight:700; margin-bottom:6px}
+.dlg p.note{font-size:12.5px; color:var(--tx-3); line-height:1.8; margin-bottom:14px}
+.dlg .answer{font-size:13px; color:var(--tx-2); line-height:1.9; margin-bottom:4px}
+.dlg .answer b{color:var(--tx); font-weight:650}
+.dlg input[type=text]{
+  width:100%; background:var(--sf); border:1px solid var(--bd-2); border-radius:10px;
+  padding:10px 12px; font:inherit; font-size:13.5px; color:var(--tx); outline:none;
+  margin-bottom:12px;
+}
+.dlg input[type=text]:focus{border-color:var(--blue)}
+.dlg .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+.dlg button{
+  background:none; border:1px solid var(--bd-2); border-radius:10px;
+  padding:8px 14px; font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default;
+}
+.dlg button:hover{border-color:var(--tx-3); color:var(--tx)}
+.dlg button.primary{border-color:var(--bd-2); background:var(--sf-2); color:var(--tx)}
+.dlg button.primary:hover{border-color:var(--tx-3)}
+.dlg button[disabled]{opacity:.45}
+.dlg button[disabled]:hover{border-color:var(--bd-2); color:var(--tx-2)}
+/* 四种来源的按钮。对话里和详情页里共用同一套——两处各写一遍，
+   迟早会一处改了另一处没改。 */
+button.kind{
+  display:block; width:100%; text-align:left; margin-bottom:8px; padding:11px 13px;
+  background:none; border:1px solid var(--bd-2); border-radius:10px;
+  font:inherit; cursor:default;
+}
+button.kind b{display:block; font-size:13px; color:var(--tx); font-weight:650; margin-bottom:2px}
+button.kind span{font-size:11.5px; color:var(--tx-3)}
+button.kind:hover{border-color:var(--tx-3)}
+button.kind.on{border-color:var(--tx-3); background:var(--sf-2)}
+
+.dlg .cur{margin-top:14px; padding:12px 14px; border:1px solid var(--bd);
+  border-radius:10px; background:var(--sf); font-size:12.5px; color:var(--tx-2); line-height:1.8}
+.dlg .cur b{font-size:19px; color:var(--tx); font-weight:700;
+  font-variant-numeric:tabular-nums; margin-right:3px}
+.dlg .bad{border-color:var(--bd-2); background:var(--sf-2); color:var(--tx-2)}
+
+
+/* 页面里的链接一律不带下划线（默认那条是浏览器的，和我们这套字重不搭）。
+   需要提示「这是链接」的地方自己写 hover。 */
+a{color:inherit; text-decoration:none}
+
+/* ---------------- 目标卡 ---------------- */
+.card{background:var(--cbg);border:1px solid var(--cbd);border-radius:13px;
+  padding:15px 16px 13px}
+/* 卡片整张是个链接，点开进这个目标的详情页。 */
+a.card{display:block;text-decoration:none;color:inherit;
+  transition:border-color .12s ease}
+a.card:hover{border-color:var(--c)}
+a.card:focus-visible{outline:2px solid var(--c);outline-offset:2px}
+.chead{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
+.ct{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:650;color:var(--ctx)}
+.ct i{width:8px;height:8px;border-radius:2.5px;background:var(--c);flex:none}
+.cd{font-size:11.5px;font-weight:700;color:var(--c);font-variant-numeric:tabular-nums}
+.cd.zero{color:var(--tx-3);font-weight:500}
+.vrow{display:flex;align-items:baseline;gap:5px;margin-bottom:10px}
+.v{font-size:28px;font-weight:750;letter-spacing:-.035em;line-height:1;
+  font-variant-numeric:tabular-nums}
+.v.none{color:var(--tx-3);font-weight:400}
+.u{font-size:11.5px;color:var(--tx-3)}
+
+.cv{width:100%;height:44px;display:block;margin-bottom:11px}
+.cv-line{fill:none;stroke:var(--c);stroke-width:2;stroke-linejoin:round;
+  vector-effect:non-scaling-stroke}
+.cv-base{stroke:var(--cbd);stroke-width:1;vector-effect:non-scaling-stroke}
+/* 曲线的三层圆点（破零点光晕、破零点、线尾）都去掉了，样式一并删干净——
+   留着死规则，下次改曲线的人会以为还有东西在用它们。 */
+.cempty{height:44px;margin-bottom:11px;display:flex;align-items:center;
+  font-size:11.5px;color:var(--tx-3);border-bottom:1px dashed var(--cbd)}
+/* 「规则还没接线」和「还没有记录」用的是同一个位置，但说的不是一件事：
+   前者那条线现在算不出数，后者只是还没动。所以颜色也不一样。 */
+.cempty.unwired{color:var(--amber-tx);border-bottom-color:var(--amber-bd)}
+
+.strip{display:flex;gap:2px;opacity:.85}
+.tick{flex:1;height:12px;background:#fff;border-radius:2px;opacity:.75}
+.tick.on{background:var(--c);opacity:.55}
+
+.gmeta{font-size:11px;color:var(--ctx);opacity:.72;margin-top:9px;padding-top:9px;
+  border-top:1px solid var(--cbd);line-height:1.6}
+.gmeta b{font-weight:650}
+
+.lsum{margin-top:6px;padding:13px 16px;border:1px dashed var(--bd);border-radius:12px;
+  font-size:12px;color:var(--tx-3);line-height:1.75;background:var(--sf)}
+.lsum b{color:var(--tx-2);font-weight:650}
+.lsum code{font-family:var(--ff-mono);font-size:11.5px;background:var(--sf-2);
+  padding:1px 5px;border-radius:4px;color:var(--tx-2)}
+
+/* ---------------- 时间线（流水） ---------------- */
+/* 行的内容——高度已经在上面定死了，这里只管里面怎么排。 */
+.dlabel{grid-column:1 / 3; display:flex; align-items:baseline; gap:10px;
+  width:max-content}
+.dl{width:46px; flex:none; text-align:right; font-size:13px; font-weight:700}
+.dw{font-size:11.5px;color:var(--tx-3)}
+
+.time{font-size:11.5px;color:var(--tx-3);font-variant-numeric:tabular-nums;
+  font-family:var(--ff-mono);text-align:right;padding-top:2px}
+/* 竖线只在一组之内连起来：一组是「同一天」。 */
+.rail{position:relative;align-self:stretch}
+.rail::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;
+  background:var(--line);transform:translateX(-50%)}
+.rail .dot{position:absolute;left:50%;top:6px;width:9px;height:9px;border-radius:50%;
+  background:var(--c);transform:translateX(-50%);z-index:1;
+  box-shadow:0 0 0 3px var(--bg)}
+/* 没关联目标的记录：空心点，安静但不隐藏。它确实发生过。 */
+.rail .dot.none{background:var(--bg);
+  box-shadow:inset 0 0 0 2px var(--bd-2), 0 0 0 3px var(--bg)}
+.day + .entry .rail::before{top:-6px}
+.body .act{font-size:13.5px;font-weight:600;letter-spacing:-.005em}
+.entry.unlinked .act{font-weight:500;color:var(--tx-2)}
+.body .sub{font-size:11.5px;color:var(--tx-3);margin-top:1px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.tags{display:flex;align-items:center;gap:8px;padding-top:2px}
+.chip{font-size:11px;font-weight:650;padding:3px 9px;border-radius:99px;
+  background:var(--cbg);color:var(--ctx);border:1px solid var(--cbd);white-space:nowrap}
+.chip.none{background:transparent;color:var(--tx-3);border-style:dashed}
+/* 挂着但这条规则不接受手工记录：虚线 + 说明。挂着 ≠ 计分。 */
+.chip.noscore{border-style:dashed;background:transparent;color:var(--tx-3)}
+.chip.noscore::after{content:"·不计入";opacity:.75}
+/* 后台补判还没回来：既不说计入也不说不计入——那两句话此刻都还不成立。
+   状态属于这一条记录，所以画在它的标签上，不画在输入框里。 */
+.chip.pending{border-style:dashed;background:transparent;color:var(--tx-3)}
+.chip.pending::after{content:"·分类中";opacity:.75}
+
+.nogoal{padding:2px 2px 10px;color:var(--tx-3);font-size:13px;line-height:1.9}
+
+.warn{margin-top:16px;padding:14px 18px;background:#fffbeb;border-left:3px solid var(--amber);
+  border-radius:0 10px 10px 0;font-size:12.5px;color:var(--amber-tx);line-height:1.75}
+.warn b{font-weight:700}
+.warn code{font-family:var(--ff-mono);font-size:11.5px;background:rgba(0,0,0,.05);
+  padding:1px 5px;border-radius:4px}
+
+/* 没有页脚。那些话是设计文档里的纪律，不是给人看的内容。 */
+
+/* ---------------- 错误页 ---------------- */
+/* 窗口起来了但读不到数据时显示。宁可难看，也要让人看懂是哪一步断的。 */
+.err h1{font-size:15px;font-weight:700;margin-bottom:12px}
+.err p{font-size:13px;color:var(--tx-2);margin-bottom:16px}
+.err pre{font-family:var(--ff-mono);font-size:12.5px;background:var(--sf-2);
+  border:1px solid var(--bd);border-radius:10px;padding:14px 16px;
+  white-space:pre-wrap;word-break:break-word}
+
+/* ---------------- 目标详情（布局 C）---------------- */
+/* 点卡片进来的。整个窗口只显示这一个目标。
+   结构：整宽头部（曲线是主角）+ 下面「规则 | 记录」两栏。
+   两栏各自滚动，所以头部不会随着记录翻上去——翻到第 200 条，
+   那条曲线和当前值还在原地。 */
+.detail{flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden}
+
+/* ---- 整宽头部 ---- */
+/* 详情页用**固定边距**，不用 --outer。
+   --outer 是「把 1120 的内容列居中」，窗口越宽它越大；两栏布局里它会把
+   左栏的内边距撑到 300px 以上，把那一栏挤成一字宽（全屏时踩过）。
+   这一屏本来就是整宽的一屏，不套 1120 那个网格。 */
+.hero{flex:none; background:var(--sf); border-bottom:1px solid var(--bd);
+  padding:16px 30px 18px}
+/* 右边那个当前值对齐**左栏的底边**（也就是 why 那一行的底部），不是对齐顶部。
+   顶对齐时它悬在标题旁边，看着像浮在半空；底对齐之后它是这一块的落脚点。 */
+.hero-top{display:flex; align-items:flex-end; justify-content:space-between; gap:40px}
+.dtitle{display:flex; align-items:center; gap:11px; font-size:28px; font-weight:700;
+  letter-spacing:-.03em; line-height:1.15}
+.dtitle i{width:13px; height:13px; border-radius:3.5px; background:var(--c); flex:none}
+.dcur{flex:none; display:flex; align-items:baseline; gap:8px}
+.dval{font-size:56px; font-weight:750; color:var(--c);
+  font-variant-numeric:tabular-nums; letter-spacing:-.05em; line-height:1}
+.dval.zero{color:var(--tx-3); font-weight:400}
+.unit{font-size:13px; color:var(--tx-3)}
+
+.dcurve{margin-top:16px}
+.dcurve svg{width:100%; height:116px; display:block}
+.cv-foot{display:flex; justify-content:space-between; margin-top:6px;
+  font-size:10.5px; color:var(--tx-3); font-family:var(--ff-mono)}
+
+.back{
+  display:inline-flex; align-items:center; gap:6px;
+  background:none; border:0; padding:0 8px 0 0; margin-bottom:12px;
+  font:inherit; font-size:12.5px; color:var(--tx-3); cursor:default;
+  text-decoration:none;
+}
+.back:hover{color:var(--tx); text-decoration:underline}
+
+/* ---- 下面两栏：规则 | 记录 ---- */
+.panes{flex:1; min-height:0; display:grid; grid-template-columns:minmax(300px,380px) 1fr}
+.pane{min-height:0; min-width:0; overflow-y:auto; overflow-x:hidden;
+  scrollbar-gutter:stable; padding:20px 0 48px}
+/* 左栏的内容从 30px 起（和上面的 hero 同一条竖线），右栏从分隔线往里让 34px。 */
+.pane.rules{border-right:1px solid var(--bd); padding-left:30px; padding-right:26px}
+.pane.recs{display:flex; flex-direction:column; overflow:hidden; padding-left:34px}
+/* 中间还隔着一层 .dsec —— 不给它 flex:1，下面的 .dlog 就撑不开也压不住。 */
+.pane.recs .dsec{flex:1; min-height:0; display:flex; flex-direction:column}
+.pane.recs .dsec h3,.pane.recs .hint{flex:none; padding-right:30px}
+/* 左栏比右栏短很多时，别让「修改/归档/删除」掉到视野外 */
+.pane.rules{padding-bottom:60px}
+
+.field{margin-bottom:12px}
+.field label{display:block; font-size:11.5px; color:var(--tx-3); margin-bottom:5px}
+.field input,.field textarea{
+  width:100%; background:var(--sf); border:1px solid var(--bd-2); border-radius:10px;
+  padding:9px 12px; font:inherit; font-size:13.5px; color:var(--tx); outline:none;
+  resize:none;
+}
+.field input:focus,.field textarea:focus{border-color:var(--blue)}
+.hint{font-size:11.5px; color:var(--tx-3); line-height:1.7; margin-top:10px}
+/* 「有 N 条记录没归到规则，所以没进曲线」。
+   这件事不报错、界面也不会坏，所以最容易变成「数字明明不动，却没人知道为什么」——
+   用告警色，让它在规则列表里自己跳出来。 */
+.hint.warn{color:var(--amber-tx); background:#fffbeb; border-left:3px solid var(--amber);
+  border-radius:0 8px 8px 0; padding:9px 12px; font-size:12px}
+.warnline{margin-top:14px; padding:11px 14px; background:#fffbeb;
+  border-left:3px solid var(--amber); border-radius:0 10px 10px 0;
+  font-size:12.5px; color:var(--amber-tx); line-height:1.75}
+
+/* 记录区不再是「页面里的一个盒子」，它就是这一栏本身——所以它得把
+   标题下面剩下的高度全占掉，并且自己滚（见上面 .pane.recs 的注释）。
+   右内边距加在滚动容器自己身上，滚动条才会贴住窗口右边缘。 */
+.dlog{flex:1; min-height:0; overflow-y:auto; overflow-x:hidden;
+  scrollbar-gutter:stable; padding-right:30px}
+
+.dsec h3{font-size:12.5px; font-weight:700; color:var(--tx-2); margin-bottom:8px}
+.dsec h3 span{font-weight:400; color:var(--tx-3); margin-left:6px}
+.dwhy{margin-top:8px; font-size:13px; color:var(--tx-2); line-height:1.7}
+
+/* 设置页：单栏、自己滚。**不复用 .panes 那个两栏网格**——设置只有一栏，
+   套上去会在右边留一大片空白，看起来像内容没加载出来。 */
+.settings{flex:1; min-height:0; overflow-y:auto; overflow-x:hidden;
+  padding:22px 30px 60px; scrollbar-gutter:stable}
+.settings .dsec{max-width:620px; margin-bottom:34px}
+.settings .dsec:last-child{margin-bottom:0}
+.settings .dacts{margin-top:20px}
+/* 字段下面那句说明。比 .hint 更贴字段，所以更小、更近。 */
+.fhint{margin-top:6px; font-size:11.5px; color:var(--tx-3); line-height:1.7}
+.fhint code{font-family:var(--ff-mono); font-size:11px; background:var(--sf-2);
+  padding:1px 4px; border-radius:4px}
+.frow{display:flex; align-items:center; gap:8px}
+.frow button{flex:none; background:none; border:1px solid var(--bd-2); border-radius:10px;
+  padding:8px 12px; font:inherit; font-size:12.5px; color:var(--tx-3); cursor:default}
+.frow button:hover{border-color:var(--rose); color:var(--rose-tx)}
+.frow button[disabled]{opacity:.4}
+.frow button[disabled]:hover{border-color:var(--bd-2); color:var(--tx-3)}
+.frow button.armed{border-color:var(--rose); color:var(--rose-tx)}
+/* 滑块：用目标色，和页面上其他可操作的东西一个调子。 */
+.settings input[type=range]{width:100%; accent-color:var(--blue); height:22px; padding:0}
+.hint.bad{color:var(--rose-tx); background:var(--rose-bg); border-left:3px solid var(--rose);
+  border-radius:0 8px 8px 0; padding:9px 12px; font-size:12px}
+
+.rule{display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+  padding:10px 0; border-bottom:1px solid var(--bd)}
+.rule:last-of-type{border-bottom:0}
+.rule .rkind{font-size:13px; font-weight:650; color:var(--tx)}
+.rule .rtarget{font-size:11.5px; color:var(--tx-3); margin-top:1px}
+.rule .rwhy{font-size:12.5px; color:var(--tx-2); margin-top:3px; line-height:1.7}
+.rule .x{flex:none; background:none; border:0; padding:2px 4px;
+  font:inherit; font-size:11.5px; color:var(--tx-3); cursor:default}
+.rule .x:hover{color:var(--tx)}
+.addrule{display:inline-flex; align-items:center; gap:6px; margin-top:10px;
+  background:none; border:1px dashed var(--bd-2); border-radius:10px;
+  padding:7px 12px; font:inherit; font-size:12.5px; color:var(--tx-3); cursor:default}
+.addrule:hover{border-color:var(--tx-3); color:var(--tx-2)}
+
+.dacts{display:flex; gap:8px; flex-wrap:wrap; margin-top:30px;
+  border-top:1px solid var(--bd); padding-top:16px}
+.dacts button{background:none; border:1px solid var(--bd-2); border-radius:10px;
+  padding:8px 14px; font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default}
+.dacts button:hover{border-color:var(--tx-3); color:var(--tx)}
+.dacts button[disabled]{opacity:.4}
+.dacts button[disabled]:hover{border-color:var(--bd-2); color:var(--tx-2)}
+.dacts button.danger:hover{border-color:var(--rose); color:var(--rose-tx)}
+.dacts button.armed{border-color:var(--rose); color:var(--rose-tx)}
+
+/* ---------------- 模态确认框 ---------------- */
+/* 危险动作（删规则、删目标）一律走这里。
+   原来删除是「按钮原地变成问句、再点一下」：不用弹窗，但**问句写在按钮上**，
+   正在读别处的人得先注意到按钮变了。模态把「要删的是什么」摆在眼前，
+   代价是打断一次——删除值得这一次打断。 */
+.modal{position:fixed; inset:0; z-index:100; display:flex;
+  align-items:center; justify-content:center; background:rgba(28,26,23,.32)}
+.modal[hidden]{display:none}
+.mbox{width:min(430px, calc(100vw - 60px)); background:var(--sf);
+  border:1px solid var(--bd-2); border-radius:14px; padding:20px 22px 16px;
+  box-shadow:0 18px 48px rgba(0,0,0,.18)}
+.mbox h3{font-size:15px; font-weight:700; margin-bottom:8px}
+.mbox p{font-size:13px; color:var(--tx-2); line-height:1.75}
+.mbox .mwhat{margin-top:12px; padding:9px 12px; border-radius:9px;
+  background:var(--sf-2); font-size:12.5px; color:var(--tx-2);
+  word-break:break-word}
+.macts{display:flex; justify-content:flex-end; gap:8px; margin-top:18px}
+.macts button{background:none; border:1px solid var(--bd-2); border-radius:10px;
+  padding:8px 14px; font:inherit; font-size:12.5px; color:var(--tx-2); cursor:default}
+.macts button:hover{border-color:var(--tx-3); color:var(--tx)}
+.macts button.danger{border-color:var(--rose); color:var(--rose-tx)}
+.macts button.danger:hover{background:var(--rose-bg)}
+
+@media(max-width:940px){
+  /* 窄到放不下两栏：整页滚，两栏各自滚就没意义了。
+     滚动条回到页面边缘，不必再往窗口边上贴。
+
+     **两栏都改成 display:block。** 只把 grid 改成单列是不够的：
+     .left/.right 还是 flex 容器，里面的 .goals/.log 是 flex:1 + overflow:visible，
+     内容会越过自己那一行叠到下一行上（窄屏实测：卡片压在日志上）。
+     块级流没有这个问题——高度就是内容高度。 */
+  .cols{display:block; overflow-y:auto; padding:10px var(--pad) 0}
+  .left,.right{display:block}
+  .goals,.log{height:auto; overflow:visible; padding-bottom:0; padding-right:0}
+  .addgoal{margin:16px 0 18px}
+  /* 输入框吸在底部：窄屏下它是唯一一直在用的东西，不该跟着滚走。 */
+  .composer{position:sticky; bottom:0; padding:10px 0 14px; background:var(--bg)}
+
+  /* 详情页同理：单列之后不能再靠 grid 自动行高 + flex:1。 */
+  .hero{padding:14px var(--pad) 16px}
+  .hero-top{flex-direction:column; gap:12px}
+  .panes{display:block; overflow-y:auto}
+  .pane{display:block; overflow:visible; padding:18px var(--pad) 0}
+  .pane.rules{border-right:0; border-bottom:1px solid var(--bd); padding-bottom:18px}
+  .pane.recs{padding-left:var(--pad)}
+  .pane.recs .dsec{display:block}
+  .dlog{height:auto; max-height:none; overflow:visible; padding-right:0}
+}

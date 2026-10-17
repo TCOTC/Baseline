@@ -1,6 +1,7 @@
 /target
 /data
-/src-tauri/gen/schemas
+/bin
+/dist-electron
 *.db
 *.db-journal
 *.db-wal
@@ -8,3 +9,10 @@
 .vscode/
 # 构建日志：临时产物，误提交过一次
 build.log
+
+# 前端依赖与构建产物。dist 里只留 .gitkeep —— 没有前端构建时
+# `go build` 仍然能过，页面会提示「先 pnpm build」。
+/web/node_modules
+/web/dist
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep

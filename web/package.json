@@ -1,0 +1,56 @@
+{
+  "name": "baseline-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "description": "基线 —— 前端与 Electron 外壳",
+  "author": "Baseline",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/keep-dist.mjs",
+    "electron": "electron electron/main.cjs",
+    "pack": "electron-builder --win --dir",
+    "dist": "electron-builder --win nsis"
+  },
+  "dependencies": {
+    "vue": "^3.5.44"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.10",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
+    "playwright": "^1.64.1",
+    "vite": "^8.3.4"
+  },
+  "build": {
+    "appId": "dev.baseline.desktop",
+    "productName": "Baseline",
+    "directories": {
+      "output": "../dist-electron"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../bin/baseline.exe",
+        "to": "baseline.exe"
+      },
+      {
+        "from": "../assets/icons",
+        "to": "icons"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "../assets/icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

@@ -2,112 +2,112 @@
 
 在这个仓库里干活的约定。产品定位与设计取舍见 `README.md`，这里只写「怎么改、怎么验证、怎么提交」。
 
+## 技术栈（2026-10-18 迁移后）
+
+- **内核与 HTTP 服务**：Go 1.24+，SQLite 用 `modernc.org/sqlite`（纯 Go，无 cgo）。
+- **界面**：Vue 3 + Vite（`web/`），开发时 HMR。
+- **外壳**：Electron 44（无边框窗口 + 自绘顶栏 + 托盘）。
+- 前端产物编进 Go 二进制（`internal/webui/dist`），所以**运行时只有一个 exe**。
+
 ## 常用命令
 
 ```powershell
-cargo check -p baseline                                           # 内核单独编译（约 6 秒）
-cargo test                                                        # 判定规则 / 归属 / 快照语义（约 2 秒）
-cargo build --workspace                                           # 内核 + 外壳（约 10 秒，最后再跑）
-cargo run -- init                                                 # 建库（幂等）
-cargo run -- render --window -o data/_v.html                      # 导出窗口那一屏的 HTML（不用开窗口）
-cargo run -p baseline-desktop                                     # 桌面窗口（窗口里 F5 即刷新数据）
-powershell -ExecutionPolicy Bypass -File scripts/demo.ps1         # 演示数据，写 data/_demo.db
-powershell -ExecutionPolicy Bypass -File scripts/ui-check.ps1     # 端到端外壳检查（15 项，退出码 0/1）
+go test ./...                                              # 判定 / 归属 / 快照语义（<1 秒）
+go build -o bin/baseline.exe ./cmd/baseline                # 内核 + CLI + HTTP
+go run ./cmd/baseline --db data/_demo.db serve --port 7717 --debug
+cd web; pnpm dev                                           # Vite :5173（改 Vue/CSS 即时生效）
+cd web; pnpm build                                         # 产物落进 internal/webui/dist
+powershell -ExecutionPolicy Bypass -File scripts/demo.ps1  # 演示数据，写 data/_demo.db
+powershell -ExecutionPolicy Bypass -File scripts/check.ps1 # 全量：构建 + 浏览器 + 外壳
+node web/scripts/check-ui.mjs                              # 只跑浏览器端到端（服务要已在跑）
+node web/scripts/check-electron.mjs                        # 只跑 Electron 外壳
 ```
 
-`cargo test` 和 `ui-check.ps1` 的覆盖面**不重叠**，改哪边跑哪边：前者守内核语义
-（判定规则、记录归属、快照冻结），后者守**外壳**（窗口按钮、拖动、两栏独立滚动）。
-内核那一侧坏掉时界面完全正常，只是数字变成另一个——没有报错，也没有红框。
-`ui-check.ps1` 退出码 2 是「拿不到前台窗口，这一轮没跑」，不是通过。
-
-默认库是 `%APPDATA%\Baseline\baseline.db`（`--db <路径>` 或 `BASELINE_DB` 可覆盖）。
+默认库是 `%APPDATA%\Baseline\baseline.db`（`--db` 或 `BASELINE_DB` 可覆盖）。
 **不要拿真实库跑自动化**，演示和测试一律指向 `data/` 下的临时库。
 **测 AI 更要用一次性库**：`ai set` 会覆盖密钥，拿别人的库试一次就把人家配好的密钥冲掉了。
 
+## 唯一的构建陷阱
+
+**`pnpm build` 之后必须重新 `go build`。** 前端是编进二进制的，只 build 前端不 build Go，
+浏览器里看到的还是旧页面——而且刷新、重启服务都没用，因为旧的那份在 exe 里。
+这是这套结构里唯一一个「改了没生效」的坑。
+
 ## 验证：能用便宜的就别用贵的
 
-**改完一批再验一次，不要改一行验一行。** 下面按「代价从低到高」排，能用上面那条就
-不要用下面那条：
+**改完一批再验一次，不要改一行验一行。** 按代价从低到高：
 
 | 想确认的事 | 用什么 | 代价 |
 |---|---|---|
-| 内核语义（归属、快照、拒绝） | `cargo test` | 2 秒 |
-| 文案、DOM 结构、渲染出的属性 | `render --window/--settings` + `Select-String` | 1 秒，**不用开窗口** |
-| 页面里的真实状态（元素坐标、DOM、变量、交互） | 调试桥 `Invoke-Js`（见下） | 一次 HTTP |
-| 窗口看起来对不对 | `Save-Shot` + 看图 | 一次启动 + 读一张 200KB 的图 |
-| 外壳（顶栏、拖动、两栏滚动） | `ui-check.ps1` | 半分钟，且要抢前台 |
+| 内核语义（归属、快照、拒绝） | `go test ./...` | <1 秒 |
+| 一屏数据对不对（数字、待办数、AI 是否可用） | `GET /api/view` / `GET /__state` | 一次 HTTP |
+| 文案、DOM 结构、曲线路径 | `node web/scripts/check-ui.mjs`（Playwright） | 几秒，不用开窗口 |
+| 真实的排版和交互 | 上面那套的截图（`data/_ui/*.png`） | 读一张图 |
+| 窗口按钮、托盘、关窗不退出 | `check-electron.mjs` | 几秒，会开一个窗口 |
 
 两条踩过的坑：
 
-- **动了内容/文案不必跑 `ui-check`**：它 15 项里 14 项在量顶栏和滚动，改流水内容碰不到它们；
-  唯一相关的「界面没有 JS 异常」在 `data/desktop.log` 里是免费的。
-- **截图会骗人**：`PrintWindow` 可能返回缓存帧，两张 PNG 字节一致（`Test-SameRegion` 能识破）。
-  据此得出的「点击没生效」是假结论。
+- **页面里的数字一律来自服务端**。前端不算 delta、不算累计，连「+3 / 持平 / 还没有记录」
+  都是 Go 算好的。改前端时别顺手在 `computed` 里补一次算术——两边各算各的，
+  迟早显示成两个数，而且坏掉时不报错。
+- **不要用截图判断「点击没生效」**。先看 `/__state` 或 `page.evaluate` 读到的 DOM，
+  截图只能证明像素，不能证明状态。
 
-## 调试桥：在活着的页面上执行 JS
+## 调试：浏览器、`/__state`、Playwright
 
-窗口没有开发工具，界面元素只能靠截图目测坐标去点——一次「点错 → 再截图 → 再点」
-要好几个来回。所以外壳带一个**只在 `--debug` 下开**的桥（`src-tauri/src/debug.rs`）：
+旧版（Tauri）那个「在页面里执行任意 JS」的调试桥**已经删了**，因为不再需要：
+
+- 开发时浏览器直接开 `http://127.0.0.1:7717`，DevTools 原生可用；
+- AI / 自动化用 Playwright 的 `page.evaluate`，能力等价，而且不用在服务里常开一个口子；
+- `--debug` 只多一个 `GET /__state`：各目标的当前值、流水行数、没关联目标的条数、
+  AI 能不能用。给「不想开浏览器」的场合用。
 
 ```powershell
-Import-Module scripts\dbg.psm1
-Start-Baseline -Db data/_demo.db        # 起窗口，等到真的能应答（不睡固定秒数）
-Invoke-Js "document.querySelectorAll('.chip.pending').length"
-Invoke-ClickOn '.send'                  # 先问坐标，再按坐标点
-Invoke-TypeInto '#composer-input' '读完了第 3 章'
-Get-UiLog -Tail 20
-Stop-Baseline
+.\bin\baseline.exe --db data/_demo.db serve --port 7717 --debug
+Invoke-RestMethod http://127.0.0.1:7717/__state | ConvertTo-Json -Depth 4
 ```
 
-它**只绑 127.0.0.1、随机端口、默认关闭**。能在页面里执行任意 JS 等于把窗口的完全
-控制权交给本机进程，所以：**别默认开，别绑 0.0.0.0，别指望它上线**。
-
-## 提交前
-
-1. `cargo build --workspace` 通过（迭代时用 `cargo check -p baseline`）；改了 manifest 顺手
-   `cargo metadata` 看一眼有没有警告。
-2. 动了**外壳**就跑 `ui-check.ps1`，退出码当闸门；只动了内容/文案，用上面那张表里更便宜的办法。
-3. `git status` 里只该有你打算提交的文件。`target/`、`data/`、`build.log`、`*.db` 都是运行时产物，永不入库。
+安全边界：服务**只绑 127.0.0.1**，并校验 `Host`（防 DNS rebinding）。打包时额外用
+随机端口 + 每次启动的 token（首访 `?t=` 换成 HttpOnly cookie）。
+**别为了省事把这两条关掉，也别绑 0.0.0.0。**
 
 ## 硬约束
 
-- **判定口径只有一份实现。** 内核是 lib（`src/lib.rs`），CLI 与桌面外壳都调它；同一个语义不要在两处各写一遍。
-  判定就是 `metrics::source_value`，记录归属就是 `db::resolve_links`。归不下来的**一律不猜**，
-  但有两种处置：`defer = false` 就地拒绝并列出候选（说不清就让人现在选）；
+- **判定口径只有一份实现。** 就是 `internal/metrics.SourceValue`；记录归属是
+  `store.ResolveLinks`。同一个语义不要在两处各写一遍。
+  归不下来的**一律不猜**，但有两种处置：`defer = false` 就地拒绝并列出候选；
   `defer = true` **先挂空着写下来**，等 AI 补判或者等人去详情页指认。
-  窗口里那排气泡只负责问，不负责判。
-- **AI 不能成为判定的第二份实现。** 它只从调用方给的候选里挑一条，候选之外的 id 一律作废
-  （`ai::parse_reply` 核对），置信度不到门槛就什么都不选。
-  **顺序也不许反过来：记录先落库（`add_checkin` 里一次网络请求都没有），AI 只负责事后
-  补判（`ai::classify_one`）——它只填空着的格子，包括「压根没挂目标」那种。**
-  把模型放到写库之前，界面就得等它，而一条已经发生的事不该因为别人的服务器慢而记不下来。
-  跟着这条走：**新加的判定逻辑进 `ai.rs` 之外的那一层**，别在提示词里再实现一遍规则。
-- **命令的返回值也要管大小写。** Tauri 只对**参数**做 camelCase → snake_case，
-  返回值走 serde 原样序列化——`needs_ai` 在界面上就是 `needs_ai`，不是 `needsAi`。
-  漏了 `#[serde(rename_all = "camelCase")]`，表现是「记录写进去了，但再也没人叫 AI 补判」，
-  而两边都不报错。**CLI 试不出来**：那边没有序列化这一层，只有真窗口能暴露。
-- **密钥明文不出内核。** 落库是密文（`ai::seal`），页面拿到的永远是掩码；
-  渲染时就把掩码定死，别把明文塞进 HTML 再让前端遮。
-- **界面由 Rust 渲染**（`src/render.rs`）。唯一例外是流水行：它要虚拟滚动，所以由 `assets/view.js` 拼装，
-  但行的 class 仍然只能来自 `assets/view.css`。
-- **零硬编码颜色**，一律走 CSS 变量；SVG 内部类名必须带 `cv-` 前缀；数字必须 `tabular-nums`。
-- **快照写了不再改写**（`INSERT OR IGNORE`），只有今天例外、每次重算；`current` 与曲线必须同源。
-- **`.ps1` / `.psm1` 必须是 UTF-8 with BOM**（Windows PowerShell 5.1 会把无 BOM 的脚本按 ANSI 读，
-  中文注释直接变语法错误）。入库统一 LF，脚本 CRLF，由 `.gitattributes` 保证。
-  **编辑工具会把 BOM 抹掉**，所以脚本的顺序是「先改内容，最后补 BOM」，补完再跑一次：
+- **AI 不能成为判定的第二份实现。** 它只从调用方给的候选里挑一条，候选之外的 id
+  一律作废（`ai.ParseReply` 核对），置信度不到门槛就什么都不选。
+  **顺序也不许反过来：记录先落库，AI 只负责事后补判**——它只填空着的格子，
+  包括「压根没挂目标」那种。
+- **数字和曲线同源**：`current` 和 `deltaWeek` 都取自快照序列，前端只负责显示。
+- **快照写了不再改写**（`INSERT OR IGNORE`），只有今天例外、每次重算。
+- **界面由 Vue 渲染，但行的 class 仍然全部来自 `web/src/assets/view.css`。**
+  零硬编码颜色，一律走 CSS 变量；SVG 内部类名带 `cv-` 前缀；数字 `tabular-nums`。
+- **mutation 之后重取整个 view model**（`GET /api/view`），不做乐观更新。
+  卡片上的数字、曲线末端、流水行必须来自同一次计算。
+- **密钥明文不出内核。** 落库是密文，页面拿到的永远是掩码；掩码在 Go 里定死。
+- **`.ps1` 必须是 UTF-8 with BOM**（Windows PowerShell 5.1 会把无 BOM 的脚本按 ANSI 读，
+  中文注释直接变语法错误）。编辑工具会把 BOM 抹掉，所以顺序是「先改内容，最后补 BOM」：
   ```powershell
-  $p = (Resolve-Path scripts\x.psm1).Path
+  $p = (Resolve-Path scripts\x.ps1).Path
   $b = [System.IO.File]::ReadAllBytes($p)
   if (-not ($b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)) {
     [System.IO.File]::WriteAllBytes($p, ([byte[]](0xEF,0xBB,0xBF) + $b))
   }
   ```
-  忘了补的表现很好认：报一堆互相矛盾的语法错误（「缺右 }」「字符串缺少终止符」），
-  而照着行号去看，那几行明明是对的。
-- **源码只用编辑工具改，绝不用 PowerShell 重写文件。** `Get-Content | Set-Content` 会按当前
-  代码页来回转一次，中文注释当场变成乱码（踩过：整个 `db.rs` 被写坏，只能从 HEAD 恢复、
-  把改动重做一遍）。要动字节（比如给脚本加 BOM）就只动字节，别把文本搬来搬去。
+- **源码只用编辑工具改，绝不用 PowerShell 重写文件。** `Get-Content | Set-Content` 会按
+  当前代码页来回转一次，中文注释当场变成乱码。要动字节（比如给脚本加 BOM）就只动字节。
 - 许可为专有许可（见 `LICENSE`），不接受外部 PR；不要引入会改变许可义务的依赖。
+
+## 提交前
+
+1. `go test ./...` 与 `go vet ./...` 通过。
+2. 改了前端：`cd web; pnpm build`，然后**重新 `go build`**。
+3. 改了界面/交互：`scripts/check.ps1`（退出码当闸门）。只改文案可以用更便宜的方式。
+4. `git status` 里只该有你打算提交的文件。`bin/`、`data/`、`web/node_modules/`、
+   `dist-electron/`、`internal/webui/dist/`（除 `.gitkeep`）都是运行时产物，永不入库。
 
 ## 提交信息风格
 
@@ -115,11 +115,11 @@ Stop-Baseline
 只写结论和原因，不写过程流水。
 
 ```
-内核与 CLI：数据层、判定规则与每日快照
+内核与界面：迁移到 Go + Vue 3 + Electron
 
-- Goal / Source / Checkin / Snapshot 四个实体（rusqlite bundled）；判定规则即计分来源，
-  没有来源的目标拒绝打卡，归档必须写原因。
-- 快照写入后不改写（INSERT OR IGNORE），历史不会因判定规则改动被重画。
+- 判定、归属、快照语义原样搬进 Go，测试一条没少；SQLite 用纯 Go 驱动，不需要 cgo。
+- 界面改成 Vue，数字和曲线仍由服务端算好，前端不再有第二份算术。
+- 外壳换成 Electron，保留无边框窗口、自绘顶栏和托盘；关窗仍只是收进托盘。
 ```
 
 不要写的：
