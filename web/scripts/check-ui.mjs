@@ -45,6 +45,15 @@ try {
 
   const rowsInDom = await page.locator('.log__rows .log-entry').count()
   ok('流水只画可见的几十行', rowsInDom > 0 && rowsInDom < 80, String(rowsInDom))
+  const scrollbarWidth = await page.evaluate(() => {
+    const el = document.querySelector('.log')
+    return el.offsetWidth - el.clientWidth
+  })
+  ok('滚动条是 8px', scrollbarWidth === 8, String(scrollbarWidth))
+  const logRight = await page.evaluate(() =>
+    Math.round(document.querySelector('.log').getBoundingClientRect().right),
+  )
+  ok('流水的滚动条贴窗口右边缘', logRight === 1280, String(logRight))
   ok('输入框在', (await page.locator('#composer-input').count()) === 1)
   ok('三个目标标签', (await page.locator('#gchips .toggle-chip').count()) === 3)
 

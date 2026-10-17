@@ -150,8 +150,8 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable;
-  // 右内边距加在滚动容器自己身上，滚动条才贴得住这一栏的右边缘。
-  padding: 0 0 var(--space-4) 0;
+  // 右内边距留在滚动容器上：内容仍落在页面内容区，滚动条贴住窗口右边缘。
+  padding: 0 calc(var(--page-padding) + var(--page-margin)) var(--space-4) 0;
 }
 
 // 详情页的记录区就是这一栏本身。

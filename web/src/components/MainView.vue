@@ -135,7 +135,8 @@ function onCreated() {
   display: grid;
   grid-template-columns: 308px 1fr;
   gap: 34px;
-  padding: 10px calc(var(--page-padding) + var(--page-margin)) 0;
+  // 右侧不留页面留白：流水要一直伸到窗口右边缘，滚动条才贴边。
+  padding: 10px 0 0 calc(var(--page-padding) + var(--page-margin));
 }
 
 .main-view__goals-column {

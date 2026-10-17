@@ -318,7 +318,8 @@ watch(
 .composer {
   flex: none;
   position: relative;
-  padding: var(--space-3) 0 var(--space-4) 0;
+  // 与流水的文字区对齐；流水自己要多留一条滚动条的位置。
+  padding: var(--space-3) calc(var(--page-padding) + var(--page-margin)) var(--space-4) 0;
 }
 
 .composer__box {

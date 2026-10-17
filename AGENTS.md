@@ -46,8 +46,10 @@ node web/scripts/check-electron.mjs                        # 只跑 Electron 外
 | 改样式要证明「视觉没动」 | `node web/scripts/shots.mjs <目录>` 改前/改后各一次，比 SHA256 | 两次截图 |
 | 窗口按钮、托盘、关窗不退出 | `check-electron.mjs` | 几秒，会开一个窗口 |
 
-两条容易犯的错：
+几条容易犯的错：
 
+- **有头浏览器验证默认用 Chrome**（Playwright `channel: 'chrome'`）；无头的 `check-ui` 用 Edge 即可。
+- **只有明确要求时才打安装包**：`pnpm run dist` 不随每次改动执行，日常验收到 `check.ps1` 为止。
 - **页面里的数字一律来自服务端**。前端不算 delta、不算累计，连「+3 / 持平 / 还没有记录」
   都是 Go 算好的。改前端时别顺手在 `computed` 里补一次算术——两边各算各的，
   迟早显示成两个数，而且坏掉时不报错。
